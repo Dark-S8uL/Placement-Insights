@@ -58,6 +58,7 @@ PROJECT_OVERVIEW = {
         "Dataset-wide placement analytics",
         "Model confidence and readiness score",
         "Role recommendations and next steps",
+        "Admin job postings with student eligibility filters",
         "React-powered responsive single-page interface",
     ],
 }
@@ -95,6 +96,19 @@ def init_db():
             role TEXT,
             display_name TEXT,
             student_id INTEGER
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS job_postings (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            form_name TEXT NOT NULL,
+            job_link TEXT NOT NULL,
+            min_cgpa REAL NOT NULL,
+            max_backlogs REAL NOT NULL,
+            created_by TEXT,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
@@ -158,6 +172,46 @@ def db_create_user(username: str, password: str, role: str = "student", display_
         return None
     conn.close()
     return db_get_user_by_username(username)
+
+
+def db_list_job_postings():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id,form_name,job_link,min_cgpa,max_backlogs,created_by,created_at FROM job_postings ORDER BY id DESC"
+    )
+    rows = cur.fetchall()
+    conn.close()
+    postings = []
+    for row in rows:
+        postings.append(
+            {
+                "id": row[0],
+                "form_name": row[1],
+                "job_link": row[2],
+                "min_cgpa": row[3],
+                "max_backlogs": row[4],
+                "created_by": row[5],
+                "created_at": row[6],
+            }
+        )
+    return postings
+
+
+def db_create_job_posting(form_name: str, job_link: str, min_cgpa: float, max_backlogs: float, created_by: Optional[str] = None):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "INSERT INTO job_postings (form_name,job_link,min_cgpa,max_backlogs,created_by) VALUES (?,?,?,?,?)",
+        (form_name, job_link, float(min_cgpa), float(max_backlogs), created_by),
+    )
+    conn.commit()
+    posting_id = cur.lastrowid
+    conn.close()
+    for posting in db_list_job_postings():
+        if posting["id"] == posting_id:
+            return posting
+    return None
 
 
 @app.on_event("startup")
@@ -519,6 +573,18 @@ def normalize_student_row(row):
     return normalized
 
 
+def job_is_eligible(row, posting):
+    cgpa = to_float(row.get("CGPA"))
+    backlogs = to_float(row.get("Backlogs"))
+    if cgpa is None or backlogs is None:
+        return False
+    return cgpa >= float(posting.get("min_cgpa") or 0) and backlogs <= float(posting.get("max_backlogs") or 0)
+
+
+def job_postings_for_student(row):
+    return [posting for posting in db_list_job_postings() if job_is_eligible(row, posting)]
+
+
 def update_student_record(student_id, updates):
     global insights
 
@@ -628,12 +694,15 @@ def predict_row(row):
 def build_student_profile(row):
     result_label, probability = predict_row(row)
     student_id = normalize_student_id(row.get("student_id") or row.get("StudentID"))
+    eligible_jobs = job_postings_for_student(row)
     return {
         "student_id": student_id,
         "branch": row.get("branch") or row.get("Core_Subjects"),
         "college_tier": row.get("college_tier") or row.get("company_type"),
         "placement": result_label,
         "probability": round(probability * 100, 2) if probability is not None else None,
+        "eligible_jobs": eligible_jobs,
+        "eligible_job_count": len(eligible_jobs),
         "readiness_score": round(
             min(to_float(row.get("CGPA")) or 0, 10.0) * 8.0
             + min(to_float(row.get("Internships")) or 0, 6.0) * 7.0
@@ -770,6 +839,13 @@ class StudentProfileUpdateRequest(BaseModel):
     Communication_Skills: float = Field(ge=0, le=100)
     Aptitude_Score: float = Field(ge=0, le=100)
     Backlogs: float = Field(ge=0)
+
+
+class JobPostingRequest(BaseModel):
+    form_name: str
+    job_link: str
+    min_cgpa: float = Field(ge=0, le=10)
+    max_backlogs: float = Field(ge=0)
 
 
 ROWS = load_rows()
@@ -972,6 +1048,7 @@ def bootstrap(current_user: Dict[str, Any] = Depends(get_current_user)):
         "model": model_info,
         "insights": insights,
         "students": student_profiles,
+        "job_postings": db_list_job_postings(),
     }
 
 
@@ -1052,6 +1129,28 @@ def create_student(payload: AddStudentDataRequest, current_user: Dict[str, Any] 
     if not created:
         raise HTTPException(status_code=500, detail="Failed to create user account")
     return get_user_public(created)
+
+
+@app.post("/api/admin/job-postings")
+def create_job_posting(payload: JobPostingRequest, current_user: Dict[str, Any] = Depends(require_admin)):
+    form_name = payload.form_name.strip()
+    job_link = payload.job_link.strip()
+    if not form_name:
+        raise HTTPException(status_code=400, detail="Form name is required")
+    if not job_link:
+        raise HTTPException(status_code=400, detail="Job link is required")
+
+    posting = db_create_job_posting(
+        form_name=form_name,
+        job_link=job_link,
+        min_cgpa=float(payload.min_cgpa),
+        max_backlogs=float(payload.max_backlogs),
+        created_by=current_user.get("username"),
+    )
+    if not posting:
+        raise HTTPException(status_code=500, detail="Failed to create job posting")
+
+    return posting
 
 
 @app.put("/api/student/profile")

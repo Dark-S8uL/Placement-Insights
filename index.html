@@ -782,6 +782,28 @@
         font-size: 1rem;
       }
 
+      .job-grid {
+        display: grid;
+        gap: 12px;
+      }
+
+      .job-card {
+        display: grid;
+        gap: 10px;
+        padding: 16px;
+        border-radius: 18px;
+        background: rgba(255, 255, 255, 0.8);
+        border: 1px solid var(--border);
+      }
+
+      .job-card strong {
+        font-size: 1rem;
+      }
+
+      .job-card a {
+        text-decoration: none;
+      }
+
       .pill-row {
         display: flex;
         flex-wrap: wrap;
@@ -1210,6 +1232,193 @@
         );
       }
 
+      function AddJobPostingForm({ token, postings, onSuccess }) {
+        const emptyForm = {
+          form_name: "",
+          job_link: "",
+          min_cgpa: "",
+          max_backlogs: "",
+        };
+        const [form, setForm] = React.useState(emptyForm);
+        const [loading, setLoading] = React.useState(false);
+        const [error, setError] = React.useState("");
+        const [success, setSuccess] = React.useState("");
+
+        const field = (key) => ({
+          value: form[key],
+          onChange: (e) =>
+            setForm((current) => ({ ...current, [key]: e.target.value })),
+        });
+
+        const handleSubmit = async (e) => {
+          e.preventDefault();
+          setError("");
+          setSuccess("");
+          setLoading(true);
+          try {
+            const body = {
+              form_name: form.form_name,
+              job_link: form.job_link,
+              min_cgpa: parseFloat(form.min_cgpa),
+              max_backlogs: parseFloat(form.max_backlogs),
+            };
+            await requestJSON("/api/admin/job-postings", token, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            });
+            setSuccess("Job posting created and matched to eligible profiles.");
+            setForm(emptyForm);
+            if (onSuccess) {
+              await onSuccess();
+            }
+          } catch (err) {
+            setError(err.message);
+          } finally {
+            setLoading(false);
+          }
+        };
+
+        const inputStyle = {
+          width: "100%",
+          border: "1px solid rgba(31,35,40,0.15)",
+          background: "rgba(255,255,255,0.9)",
+          borderRadius: "8px",
+          padding: "7px 10px",
+          font: "inherit",
+          fontSize: "0.82rem",
+          outline: "none",
+          boxSizing: "border-box",
+        };
+        const gridStyle = {
+          display: "grid",
+          gridTemplateColumns: "repeat(2, 1fr)",
+          gap: "10px",
+          marginBottom: "8px",
+        };
+
+        return (
+          <section className="section-card" style={{ marginTop: 18 }}>
+            <div className="section-title">
+              <h2>Post a job link</h2>
+              <span>Admin job posting form</span>
+            </div>
+            <p>
+              Add a form name, URL, minimum CGPA, and maximum backlog count.
+              Eligible students will see the posting in their profile section.
+            </p>
+            <form onSubmit={handleSubmit} style={{ padding: "4px 0 6px" }}>
+              <div style={gridStyle}>
+                <label className="auth-field" style={{ gridColumn: "1 / -1" }}>
+                  Form name
+                  <input
+                    {...field("form_name")}
+                    style={inputStyle}
+                    placeholder="e.g. Campus drive for ACME Labs"
+                    required
+                  />
+                </label>
+                <label className="auth-field" style={{ gridColumn: "1 / -1" }}>
+                  Job link
+                  <input
+                    {...field("job_link")}
+                    style={inputStyle}
+                    placeholder="https://company.example.com/apply"
+                    type="url"
+                    required
+                  />
+                </label>
+                <label className="auth-field">
+                  Minimum CGPA
+                  <input
+                    {...field("min_cgpa")}
+                    style={inputStyle}
+                    placeholder="e.g. 7.0"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max="10"
+                    required
+                  />
+                </label>
+                <label className="auth-field">
+                  Maximum Backlogs
+                  <input
+                    {...field("max_backlogs")}
+                    style={inputStyle}
+                    placeholder="e.g. 0"
+                    type="number"
+                    min="0"
+                    required
+                  />
+                </label>
+              </div>
+              <button
+                className="primary"
+                type="submit"
+                disabled={loading}
+                style={{ marginTop: 6 }}
+              >
+                {loading ? "Posting job..." : "Publish job posting"}
+              </button>
+              {error && (
+                <div
+                  className="status-line"
+                  style={{ color: "red", marginTop: 8 }}
+                >
+                  {error}
+                </div>
+              )}
+              {success && (
+                <div
+                  className="status-line"
+                  style={{ color: "green", marginTop: 8 }}
+                >
+                  {success}
+                </div>
+              )}
+            </form>
+
+            <div style={{ marginTop: 18 }}>
+              <div className="section-title">
+                <h2>Published postings</h2>
+                <span>{postings?.length || 0} active</span>
+              </div>
+              {postings?.length ? (
+                <div className="job-grid">
+                  {postings.map((posting) => (
+                    <div className="job-card" key={posting.id}>
+                      <strong>{posting.form_name}</strong>
+                      <div className="pill-row">
+                        <span className="pill">
+                          CGPA {formatValue(posting.min_cgpa)}
+                        </span>
+                        <span className="pill">
+                          Backlogs {formatValue(posting.max_backlogs)}
+                        </span>
+                      </div>
+                      <a
+                        href={posting.job_link}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flat-button"
+                        style={{ display: "inline-flex", width: "fit-content" }}
+                      >
+                        Open application link
+                      </a>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="section-empty">
+                  No job postings have been published yet.
+                </div>
+              )}
+            </div>
+          </section>
+        );
+      }
+
       function StudentSelfUpdateForm({ token, profile, onSaved }) {
         const [form, setForm] = React.useState(() => profileDraft(profile));
         const [loading, setLoading] = React.useState(false);
@@ -1508,6 +1717,7 @@
         const project = bootstrap?.project || publicData?.project || {};
         const model = bootstrap?.model || publicData?.model || {};
         const insights = bootstrap?.insights || publicData?.insights || {};
+        const jobPostings = bootstrap?.job_postings || [];
         const summary = insights.summary || {};
         const isAdmin = user?.role === "admin";
         const isStudent = user?.role === "student";
@@ -2085,6 +2295,16 @@
               </section>
             )}
 
+            {isAdmin && (
+              <AddJobPostingForm
+                token={token}
+                postings={jobPostings}
+                onSuccess={async () => {
+                  await refreshSession(token);
+                }}
+              />
+            )}
+
             <section className="section-card">
               <div className="section-title">
                 <h2>Profile viewer</h2>
@@ -2255,6 +2475,48 @@
                   onSaved={handleSelfSave}
                 />
               )}
+
+              <section className="section-card">
+                <div className="section-title">
+                  <h2>Eligible job postings</h2>
+                  <span>
+                    {formatValue(profile.eligible_job_count, 0)} matches
+                  </span>
+                </div>
+                {profile.eligible_jobs?.length ? (
+                  <div className="job-grid">
+                    {profile.eligible_jobs.map((posting) => (
+                      <div className="job-card" key={posting.id}>
+                        <strong>{posting.form_name}</strong>
+                        <div className="pill-row">
+                          <span className="pill">
+                            Min CGPA {formatValue(posting.min_cgpa)}
+                          </span>
+                          <span className="pill">
+                            Max backlogs {formatValue(posting.max_backlogs)}
+                          </span>
+                        </div>
+                        <a
+                          href={posting.job_link}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flat-button"
+                          style={{
+                            display: "inline-flex",
+                            width: "fit-content",
+                          }}
+                        >
+                          Open job link
+                        </a>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="section-empty">
+                    No job postings match this profile yet.
+                  </div>
+                )}
+              </section>
             </div>
           );
         };

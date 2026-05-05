@@ -18,6 +18,7 @@ It now includes local login with `admin` and `student` roles, a sidebar-based da
 - Dataset-wide analytics and group trends
 - Model metadata and feature transparency
 - Role suggestions, readiness scoring, and next steps
+- Admin job postings that surface eligible links on student profiles
 - Research summary aligned with the poster and paper
 - React-powered routed frontend served through FastAPI
 - Admin and student profile views
