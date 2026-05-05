@@ -1831,6 +1831,39 @@
           );
         }, [selectedStudentId, route.param, students, user]);
 
+        const handleAdminStudentSearch = (event) => {
+          event.preventDefault();
+          setPageError("");
+          setPageNotice("");
+
+          const query = String(studentQueryId || "").trim();
+          if (!query) {
+            setPageError("Enter a student ID to search.");
+            return;
+          }
+
+          const studentId = Number(query);
+          if (!Number.isFinite(studentId) || studentId <= 0) {
+            setPageError("Student ID must be a valid positive number.");
+            return;
+          }
+
+          const matchedStudent = students.find(
+            (item) => Number(item.student_id) === studentId,
+          );
+          if (!matchedStudent) {
+            setPageError(`No student found for ID ${query}.`);
+            return;
+          }
+
+          setSelectedStudentId(matchedStudent.student_id);
+          setStudentQueryId(String(matchedStudent.student_id));
+          setPageNotice(
+            `Opened profile for student ID ${matchedStudent.student_id}.`,
+          );
+          go(`profile/${matchedStudent.student_id}`);
+        };
+
         const renderBars = (
           items,
           valueKey = "placement_rate",
@@ -2404,12 +2437,35 @@
               </div>
               {isAdmin ? (
                 <div className="download-selector">
+                  <form
+                    className="auth-form"
+                    onSubmit={handleAdminStudentSearch}
+                    style={{ marginTop: 0 }}
+                  >
+                    <label className="auth-field">
+                      Search by student ID
+                      <input
+                        type="number"
+                        min="1"
+                        value={studentQueryId}
+                        onChange={(event) =>
+                          setStudentQueryId(event.target.value)
+                        }
+                        placeholder="Enter student ID"
+                      />
+                    </label>
+                    <button className="flat-button" type="submit">
+                      Search and open profile
+                    </button>
+                  </form>
+
                   <label className="auth-field">
                     Choose student
                     <select
                       value={selectedStudentId || ""}
                       onChange={(event) => {
                         const value = event.target.value;
+                        setStudentQueryId(value || "");
                         setSelectedStudentId(value ? Number(value) : null);
                         if (value) {
                           go(`profile/${value}`);
