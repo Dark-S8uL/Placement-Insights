@@ -1,5 +1,5 @@
 from collections import Counter, defaultdict
-from csv import DictReader, DictWriter
+from csv import DictReader, DictWriter, reader as CsvReader
 from io import StringIO
 import json
 from pathlib import Path
@@ -9,7 +9,7 @@ from uuid import uuid4
 
 import joblib
 import numpy as np
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
@@ -722,6 +722,97 @@ def predict_row(row):
     return model_predict_from_vector(vector)
 
 
+def student_row_from_values(values):
+    result_label, _ = model_predict_from_vector(
+        core_vector_from_values(
+            values["CGPA"],
+            values["Internships"],
+            values["Projects"],
+            values["Certifications"],
+            values["Communication_Skills"],
+            values["Aptitude_Score"],
+            values["Backlogs"],
+        )
+    )
+    return {
+        "student_id": values["student_id"],
+        "branch": values["branch"],
+        "college_tier": values["college_tier"],
+        "CGPA": values["CGPA"],
+        "Internships": values["Internships"],
+        "Projects": values["Projects"],
+        "Certifications": values["Certifications"],
+        "Communication_Skills": values["Communication_Skills"],
+        "Aptitude_Score": values["Aptitude_Score"],
+        "Backlogs": values["Backlogs"],
+        "Placement": "1" if result_label == "Placed" else "0",
+    }
+
+
+def parse_bulk_student_row(row, line_number):
+    missing = [field for field in BULK_STUDENT_FIELDS if row.get(field) in (None, "")]
+    if missing:
+        raise ValueError(f"Line {line_number}: missing required field(s): {', '.join(missing)}")
+
+    parsed = {
+        "username": str(row["username"]).strip(),
+        "password": str(row["password"]),
+        "display_name": str(row["display_name"]).strip(),
+        "branch": str(row["branch"]).strip(),
+        "college_tier": str(row["college_tier"]).strip(),
+    }
+    if not parsed["username"]:
+        raise ValueError(f"Line {line_number}: username is required")
+    if not parsed["password"]:
+        raise ValueError(f"Line {line_number}: password is required")
+
+    student_id = normalize_student_id(row.get("student_id"))
+    if student_id is None:
+        raise ValueError(f"Line {line_number}: student_id must be a number")
+    parsed["student_id"] = student_id
+
+    for field in [
+        "CGPA",
+        "Internships",
+        "Projects",
+        "Certifications",
+        "Communication_Skills",
+        "Aptitude_Score",
+        "Backlogs",
+    ]:
+        value = to_float(row.get(field))
+        if value is None:
+            raise ValueError(f"Line {line_number}: {field} must be a number")
+        parsed[field] = value
+
+    if not 0 <= parsed["CGPA"] <= 10:
+        raise ValueError(f"Line {line_number}: CGPA must be between 0 and 10")
+    if not 0 <= parsed["Communication_Skills"] <= 100:
+        raise ValueError(f"Line {line_number}: Communication_Skills must be between 0 and 100")
+    if not 0 <= parsed["Aptitude_Score"] <= 100:
+        raise ValueError(f"Line {line_number}: Aptitude_Score must be between 0 and 100")
+    for field in ["Internships", "Projects", "Certifications", "Backlogs"]:
+        if parsed[field] < 0:
+            raise ValueError(f"Line {line_number}: {field} cannot be negative")
+
+    return parsed
+
+
+def normalize_bulk_csv_text(text):
+    csv_rows = list(CsvReader(StringIO(text)))
+    if not csv_rows:
+        return text
+    first_row = csv_rows[0]
+    if len(first_row) == 1 and "," in first_row[0]:
+        return "\n".join(row[0] for row in csv_rows if row)
+    return text
+
+
+def add_student_row(row):
+    ROWS.append(row)
+    STUDENT_INDEX[row["student_id"]] = row
+
+
 def build_student_profile(row):
     result_label, probability = predict_row(row)
     student_id = normalize_student_id(row.get("student_id") or row.get("StudentID"))
@@ -860,6 +951,23 @@ class AddStudentDataRequest(BaseModel):
     Communication_Skills: float
     Aptitude_Score: float
     Backlogs: float
+
+
+BULK_STUDENT_FIELDS = [
+    "username",
+    "password",
+    "display_name",
+    "student_id",
+    "branch",
+    "college_tier",
+    "CGPA",
+    "Internships",
+    "Projects",
+    "Certifications",
+    "Communication_Skills",
+    "Aptitude_Score",
+    "Backlogs",
+]
 
 
 class StudentProfileUpdateRequest(BaseModel):
@@ -1154,45 +1262,9 @@ def create_student(payload: AddStudentDataRequest, current_user: Dict[str, Any] 
     if get_row_for_student(payload.student_id):
         raise HTTPException(status_code=400, detail="Student ID already exists in dataset")
     
-    # 1. Run ML inference using the same pattern as dataset_predictions_csv
-    features = np.array([[
-        float(payload.CGPA),
-        float(payload.Internships),
-        float(payload.Projects),
-        float(payload.Certifications),
-        float(payload.Communication_Skills),
-        float(payload.Aptitude_Score),
-        float(payload.Backlogs),
-    ]], dtype=float)
-    n_expected = getattr(model, "n_features_in_", 7)
-    if features.shape[1] < n_expected:
-        features = np.hstack([features, np.zeros((1, n_expected - features.shape[1]))])
-    pred = model.predict(features)[0]
-    probability = None
-    if hasattr(model, "predict_proba"):
-        try:
-            proba = model.predict_proba(features)[0]
-            probability = float(proba[1]) if len(proba) > 1 else float(proba[0])
-        except Exception:
-            pass
-    placement_label = str(pred)  # "1" or "0" depending on model output
+    new_row = student_row_from_values(payload.dict())
     
-    new_row = {
-        "student_id": payload.student_id,
-        "branch": payload.branch,
-        "college_tier": payload.college_tier,
-        "CGPA": payload.CGPA,
-        "Internships": payload.Internships,
-        "Projects": payload.Projects,
-        "Certifications": payload.Certifications,
-        "Communication_Skills": payload.Communication_Skills,
-        "Aptitude_Score": payload.Aptitude_Score,
-        "Backlogs": payload.Backlogs,
-        "Placement": placement_label,
-    }
-    
-    ROWS.append(new_row)
-    STUDENT_INDEX[payload.student_id] = new_row
+    add_student_row(new_row)
     persist_rows_to_dataset()
     
     # Recalculate statistics dynamically
@@ -1209,6 +1281,108 @@ def create_student(payload: AddStudentDataRequest, current_user: Dict[str, Any] 
     if not created:
         raise HTTPException(status_code=500, detail="Failed to create user account")
     return get_user_public(created)
+
+
+@app.post("/api/admin/students/bulk-upload")
+async def bulk_upload_students(file: UploadFile = File(...), current_user: Dict[str, Any] = Depends(require_admin)):
+    global insights
+
+    filename = file.filename or ""
+    if not filename.lower().endswith(".csv"):
+        raise HTTPException(status_code=400, detail="Upload a CSV file.")
+
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="CSV file is empty.")
+
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="CSV must be encoded as UTF-8.")
+
+    text = normalize_bulk_csv_text(text)
+    reader = DictReader(StringIO(text))
+    if not reader.fieldnames:
+        raise HTTPException(status_code=400, detail="CSV header row is required.")
+
+    missing_headers = [field for field in BULK_STUDENT_FIELDS if field not in reader.fieldnames]
+    if missing_headers:
+        raise HTTPException(
+            status_code=400,
+            detail=f"CSV is missing required column(s): {', '.join(missing_headers)}",
+        )
+
+    parsed_rows = []
+    seen_student_ids = {}
+    seen_usernames = {}
+    for line_number, row in enumerate(reader, start=2):
+        if not any(str(value or "").strip() for key, value in row.items() if key is not None):
+            continue
+        try:
+            parsed = parse_bulk_student_row(row, line_number)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+        student_id = parsed["student_id"]
+        if student_id in seen_student_ids:
+            first_line = seen_student_ids[student_id]
+            raise HTTPException(
+                status_code=400,
+                detail=f"Duplicate student ID {student_id} found in upload at line {line_number}; first seen at line {first_line}.",
+            )
+        seen_student_ids[student_id] = line_number
+
+        username_key = parsed["username"].lower()
+        if username_key in seen_usernames:
+            first_line = seen_usernames[username_key]
+            raise HTTPException(
+                status_code=400,
+                detail=f"Duplicate username '{parsed['username']}' found in upload at line {line_number}; first seen at line {first_line}.",
+            )
+        seen_usernames[username_key] = line_number
+
+        if db_student_id_exists(student_id):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Duplicate student ID {student_id} already exists; found while processing line {line_number}.",
+            )
+        if db_get_user_by_username(parsed["username"]):
+            raise HTTPException(
+                status_code=400,
+                detail=f"Username '{parsed['username']}' already exists; found while processing line {line_number}.",
+            )
+
+        parsed_rows.append(parsed)
+
+    if not parsed_rows:
+        raise HTTPException(status_code=400, detail="CSV does not contain any student rows.")
+
+    created_users = []
+    new_rows = []
+    for parsed in parsed_rows:
+        created = db_create_user(
+            username=parsed["username"],
+            password=parsed["password"],
+            role="student",
+            display_name=parsed["display_name"],
+            student_id=parsed["student_id"],
+        )
+        if not created:
+            raise HTTPException(status_code=500, detail=f"Failed to create account for {parsed['username']}.")
+        created_users.append(created)
+        new_rows.append(student_row_from_values(parsed))
+
+    for row in new_rows:
+        add_student_row(row)
+
+    persist_rows_to_dataset()
+    insights = build_insights(ROWS)
+
+    return {
+        "message": f"Uploaded {len(new_rows)} students successfully.",
+        "created": len(created_users),
+        "students": [get_user_public(user) for user in created_users],
+    }
 
 
 @app.post("/api/admin/job-postings")

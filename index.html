@@ -1234,6 +1234,86 @@
         );
       }
 
+      function BulkStudentUploadForm({ token, onSuccess }) {
+        const [file, setFile] = React.useState(null);
+        const [loading, setLoading] = React.useState(false);
+        const [error, setError] = React.useState("");
+        const [success, setSuccess] = React.useState("");
+
+        const handleSubmit = async (event) => {
+          event.preventDefault();
+          setError("");
+          setSuccess("");
+          if (!file) {
+            setError("Choose a CSV file first.");
+            return;
+          }
+
+          setLoading(true);
+          try {
+            const formData = new FormData();
+            formData.append("file", file);
+            const payload = await requestJSON(
+              "/api/admin/students/bulk-upload",
+              token,
+              {
+                method: "POST",
+                body: formData,
+              },
+            );
+            setSuccess(payload.message || "Students uploaded successfully.");
+            setFile(null);
+            event.target.reset();
+            if (onSuccess) await onSuccess();
+          } catch (err) {
+            setError(err.message);
+          } finally {
+            setLoading(false);
+          }
+        };
+
+        return (
+          <form
+            onSubmit={handleSubmit}
+            className="auth-form"
+            style={{ marginTop: 12 }}
+          >
+            <label className="auth-field">
+              Bulk upload CSV
+              <input
+                type="file"
+                accept=".csv,text/csv"
+                onChange={(event) => setFile(event.target.files?.[0] || null)}
+              />
+              <small>
+                Required columns: username, password, display_name, student_id,
+                branch, college_tier, CGPA, Internships, Projects,
+                Certifications, Communication_Skills, Aptitude_Score, Backlogs.
+              </small>
+            </label>
+            <button className="flat-button" type="submit" disabled={loading}>
+              {loading ? "Uploading..." : "Upload Student CSV"}
+            </button>
+            {error && (
+              <div
+                className="status-line"
+                style={{ color: "red", marginTop: 8 }}
+              >
+                {error}
+              </div>
+            )}
+            {success && (
+              <div
+                className="status-line"
+                style={{ color: "green", marginTop: 8 }}
+              >
+                {success}
+              </div>
+            )}
+          </form>
+        );
+      }
+
       function AddJobPostingForm({ token, postings, onSuccess }) {
         const emptyForm = {
           form_name: "",
@@ -2412,6 +2492,12 @@
                   <span>Admin: Register student + run AI prediction</span>
                 </div>
                 <AddStudentForm
+                  token={token}
+                  onSuccess={async () => {
+                    await refreshSession(token);
+                  }}
+                />
+                <BulkStudentUploadForm
                   token={token}
                   onSuccess={async () => {
                     await refreshSession(token);

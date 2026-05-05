@@ -1,0 +1,6 @@
+"username,password,display_name,student_id,branch,college_tier,CGPA,Internships,Projects,Certifications,Communication_Skills,Aptitude_Score,Backlogs"
+"student101,student123,Aarav Sharma,101,CS,Tier 1,8.6,2,4,3,82,88,0"
+"student102,student123,Meera Iyer,102,IT,Tier 2,7.8,1,3,2,75,79,0"
+"student103,student123,Rohan Verma,103,ECE,Tier 2,7.1,0,2,1,68,72,1"
+"student104,student123,Ananya Rao,104,CSE,Tier 1,9.1,3,5,4,90,92,0"
+"student105,student123,Kabir Khan,105,ME,Tier 3,6.8,1,2,1,64,69,2"
