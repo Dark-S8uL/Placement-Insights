@@ -477,7 +477,11 @@
         display: grid;
         place-items: center;
         padding: 24px;
-        background: linear-gradient(135deg, rgba(59, 130, 246, 0.08) 0%, rgba(14, 165, 233, 0.12) 100%);
+        background: linear-gradient(
+          135deg,
+          rgba(59, 130, 246, 0.08) 0%,
+          rgba(14, 165, 233, 0.12) 100%
+        );
       }
 
       .auth-card {
@@ -936,12 +940,34 @@
       const BRANCHES = ["CS", "IT", "ECE", "EEE", "ME", "CE", "Other"];
       const COLLEGE_TIERS = ["Tier 1", "Tier 2", "Tier 3"];
 
+      function profileDraft(profile) {
+        const source = profile?.profile || {};
+        return {
+          CGPA: source.CGPA ?? "",
+          Internships: source.Internships ?? "",
+          Projects: source.Projects ?? "",
+          Certifications: source.Certifications ?? "",
+          Communication_Skills: source.Communication_Skills ?? "",
+          Aptitude_Score: source.Aptitude_Score ?? "",
+          Backlogs: source.Backlogs ?? "",
+        };
+      }
+
       function AddStudentForm({ token, onSuccess }) {
         const emptyForm = {
-          username: "", password: "", display_name: "", student_id: "",
-          branch: "CS", college_tier: "Tier 2",
-          CGPA: "", Internships: "", Projects: "", Certifications: "",
-          Communication_Skills: "", Aptitude_Score: "", Backlogs: "",
+          username: "",
+          password: "",
+          display_name: "",
+          student_id: "",
+          branch: "CS",
+          college_tier: "Tier 2",
+          CGPA: "",
+          Internships: "",
+          Projects: "",
+          Certifications: "",
+          Communication_Skills: "",
+          Aptitude_Score: "",
+          Backlogs: "",
         };
         const [form, setForm] = React.useState(emptyForm);
         const [loading, setLoading] = React.useState(false);
@@ -955,7 +981,8 @@
 
         const handleSubmit = async (e) => {
           e.preventDefault();
-          setError(""); setSuccess("");
+          setError("");
+          setSuccess("");
           setLoading(true);
           try {
             const body = {
@@ -974,7 +1001,9 @@
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(body),
             });
-            setSuccess("Student registered and prediction generated successfully!");
+            setSuccess(
+              "Student registered and prediction generated successfully!",
+            );
             setForm(emptyForm);
             if (onSuccess) await onSuccess();
           } catch (err) {
@@ -985,49 +1014,385 @@
         };
 
         const inputStyle = {
-          width: "100%", border: "1px solid rgba(31,35,40,0.15)",
-          background: "rgba(255,255,255,0.9)", borderRadius: "8px",
-          padding: "7px 10px", font: "inherit", fontSize: "0.82rem",
-          outline: "none", boxSizing: "border-box",
+          width: "100%",
+          border: "1px solid rgba(31,35,40,0.15)",
+          background: "rgba(255,255,255,0.9)",
+          borderRadius: "8px",
+          padding: "7px 10px",
+          font: "inherit",
+          fontSize: "0.82rem",
+          outline: "none",
+          boxSizing: "border-box",
         };
         const selectStyle = { ...inputStyle, height: "34px" };
         const gridStyle = {
-          display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px", marginBottom: "8px",
+          display: "grid",
+          gridTemplateColumns: "1fr 1fr",
+          gap: "10px",
+          marginBottom: "8px",
         };
 
         return (
           <form onSubmit={handleSubmit} style={{ padding: "4px 0 6px" }}>
             <div style={gridStyle}>
-              <label className="auth-field">Display Name<input {...field("display_name")} style={inputStyle} placeholder="e.g. Alice Smith" required /></label>
-              <label className="auth-field">Student ID<input {...field("student_id")} style={inputStyle} placeholder="Unique numeric ID" type="number" required /></label>
-              <label className="auth-field">Username (for login)<input {...field("username")} style={inputStyle} placeholder="Login username" required /></label>
-              <label className="auth-field">Password<input {...field("password")} style={inputStyle} placeholder="Login password" type="password" required /></label>
-              <label className="auth-field">Branch
+              <label className="auth-field">
+                Display Name
+                <input
+                  {...field("display_name")}
+                  style={inputStyle}
+                  placeholder="e.g. Alice Smith"
+                  required
+                />
+              </label>
+              <label className="auth-field">
+                Student ID
+                <input
+                  {...field("student_id")}
+                  style={inputStyle}
+                  placeholder="Unique numeric ID"
+                  type="number"
+                  required
+                />
+              </label>
+              <label className="auth-field">
+                Username (for login)
+                <input
+                  {...field("username")}
+                  style={inputStyle}
+                  placeholder="Login username"
+                  required
+                />
+              </label>
+              <label className="auth-field">
+                Password
+                <input
+                  {...field("password")}
+                  style={inputStyle}
+                  placeholder="Login password"
+                  type="password"
+                  required
+                />
+              </label>
+              <label className="auth-field">
+                Branch
                 <select {...field("branch")} style={selectStyle}>
-                  {BRANCHES.map((b) => <option key={b} value={b}>{b}</option>)}
+                  {BRANCHES.map((b) => (
+                    <option key={b} value={b}>
+                      {b}
+                    </option>
+                  ))}
                 </select>
               </label>
-              <label className="auth-field">College Tier
+              <label className="auth-field">
+                College Tier
                 <select {...field("college_tier")} style={selectStyle}>
-                  {COLLEGE_TIERS.map((t) => <option key={t} value={t}>{t}</option>)}
+                  {COLLEGE_TIERS.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
                 </select>
               </label>
             </div>
-            <div style={{ ...gridStyle, gridTemplateColumns: "repeat(3, 1fr)" }}>
-              <label className="auth-field">CGPA (0–10)<input {...field("CGPA")} style={inputStyle} placeholder="e.g. 7.8" type="number" step="0.01" min="0" max="10" required /></label>
-              <label className="auth-field">Internships<input {...field("Internships")} style={inputStyle} placeholder="e.g. 1" type="number" min="0" required /></label>
-              <label className="auth-field">Projects<input {...field("Projects")} style={inputStyle} placeholder="e.g. 3" type="number" min="0" required /></label>
-              <label className="auth-field">Certifications<input {...field("Certifications")} style={inputStyle} placeholder="e.g. 2" type="number" min="0" required /></label>
-              <label className="auth-field">Communication Skills (1–10)<input {...field("Communication_Skills")} style={inputStyle} placeholder="e.g. 7" type="number" step="0.1" min="1" max="10" required /></label>
-              <label className="auth-field">Aptitude Score (0–100)<input {...field("Aptitude_Score")} style={inputStyle} placeholder="e.g. 72" type="number" min="0" max="100" required /></label>
-              <label className="auth-field">Backlogs<input {...field("Backlogs")} style={inputStyle} placeholder="e.g. 0" type="number" min="0" required /></label>
+            <div
+              style={{ ...gridStyle, gridTemplateColumns: "repeat(3, 1fr)" }}
+            >
+              <label className="auth-field">
+                CGPA (0–10)
+                <input
+                  {...field("CGPA")}
+                  style={inputStyle}
+                  placeholder="e.g. 7.8"
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  max="10"
+                  required
+                />
+              </label>
+              <label className="auth-field">
+                Internships
+                <input
+                  {...field("Internships")}
+                  style={inputStyle}
+                  placeholder="e.g. 1"
+                  type="number"
+                  min="0"
+                  required
+                />
+              </label>
+              <label className="auth-field">
+                Projects
+                <input
+                  {...field("Projects")}
+                  style={inputStyle}
+                  placeholder="e.g. 3"
+                  type="number"
+                  min="0"
+                  required
+                />
+              </label>
+              <label className="auth-field">
+                Certifications
+                <input
+                  {...field("Certifications")}
+                  style={inputStyle}
+                  placeholder="e.g. 2"
+                  type="number"
+                  min="0"
+                  required
+                />
+              </label>
+              <label className="auth-field">
+                Communication Skills (1–10)
+                <input
+                  {...field("Communication_Skills")}
+                  style={inputStyle}
+                  placeholder="e.g. 7"
+                  type="number"
+                  step="0.1"
+                  min="1"
+                  max="10"
+                  required
+                />
+              </label>
+              <label className="auth-field">
+                Aptitude Score (0–100)
+                <input
+                  {...field("Aptitude_Score")}
+                  style={inputStyle}
+                  placeholder="e.g. 72"
+                  type="number"
+                  min="0"
+                  max="100"
+                  required
+                />
+              </label>
+              <label className="auth-field">
+                Backlogs
+                <input
+                  {...field("Backlogs")}
+                  style={inputStyle}
+                  placeholder="e.g. 0"
+                  type="number"
+                  min="0"
+                  required
+                />
+              </label>
             </div>
-            <button className="primary" type="submit" disabled={loading} style={{ marginTop: 6 }}>
-              {loading ? "Registering & predicting..." : "Add Student + Run AI Prediction"}
+            <button
+              className="primary"
+              type="submit"
+              disabled={loading}
+              style={{ marginTop: 6 }}
+            >
+              {loading
+                ? "Registering & predicting..."
+                : "Add Student + Run AI Prediction"}
             </button>
-            {error && <div className="status-line" style={{ color: "red", marginTop: 8 }}>{error}</div>}
-            {success && <div className="status-line" style={{ color: "green", marginTop: 8 }}>{success}</div>}
+            {error && (
+              <div
+                className="status-line"
+                style={{ color: "red", marginTop: 8 }}
+              >
+                {error}
+              </div>
+            )}
+            {success && (
+              <div
+                className="status-line"
+                style={{ color: "green", marginTop: 8 }}
+              >
+                {success}
+              </div>
+            )}
           </form>
+        );
+      }
+
+      function StudentSelfUpdateForm({ token, profile, onSaved }) {
+        const [form, setForm] = React.useState(() => profileDraft(profile));
+        const [loading, setLoading] = React.useState(false);
+        const [error, setError] = React.useState("");
+        const [success, setSuccess] = React.useState("");
+
+        React.useEffect(() => {
+          setForm(profileDraft(profile));
+          setError("");
+          setSuccess("");
+        }, [profile]);
+
+        const field = (key) => ({
+          value: form[key],
+          onChange: (e) =>
+            setForm((current) => ({ ...current, [key]: e.target.value })),
+        });
+
+        const handleSubmit = async (e) => {
+          e.preventDefault();
+          setError("");
+          setSuccess("");
+          setLoading(true);
+          try {
+            const body = {
+              CGPA: parseFloat(form.CGPA),
+              Internships: parseFloat(form.Internships),
+              Projects: parseFloat(form.Projects),
+              Certifications: parseFloat(form.Certifications),
+              Communication_Skills: parseFloat(form.Communication_Skills),
+              Aptitude_Score: parseFloat(form.Aptitude_Score),
+              Backlogs: parseFloat(form.Backlogs),
+            };
+            const payload = await requestJSON("/api/student/profile", token, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            });
+            setSuccess("Profile updated and prediction refreshed.");
+            if (onSaved) {
+              onSaved(payload.profile);
+            }
+          } catch (err) {
+            setError(err.message);
+          } finally {
+            setLoading(false);
+          }
+        };
+
+        const inputStyle = {
+          width: "100%",
+          border: "1px solid rgba(31,35,40,0.15)",
+          background: "rgba(255,255,255,0.9)",
+          borderRadius: "8px",
+          padding: "7px 10px",
+          font: "inherit",
+          fontSize: "0.82rem",
+          outline: "none",
+          boxSizing: "border-box",
+        };
+        const gridStyle = {
+          display: "grid",
+          gridTemplateColumns: "repeat(3, 1fr)",
+          gap: "10px",
+          marginTop: "12px",
+        };
+
+        return (
+          <section className="section-card" style={{ marginTop: 18 }}>
+            <div className="section-title">
+              <h2>Update my profile</h2>
+              <span>Self-service re-prediction</span>
+            </div>
+            <p>
+              Update the values you own. The saved profile is written back to
+              the dataset and the model runs again immediately.
+            </p>
+            <form onSubmit={handleSubmit} style={{ paddingTop: 4 }}>
+              <div style={gridStyle}>
+                <label className="auth-field">
+                  CGPA
+                  <input
+                    {...field("CGPA")}
+                    style={inputStyle}
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max="10"
+                    required
+                  />
+                </label>
+                <label className="auth-field">
+                  Internships
+                  <input
+                    {...field("Internships")}
+                    style={inputStyle}
+                    type="number"
+                    min="0"
+                    required
+                  />
+                </label>
+                <label className="auth-field">
+                  Projects
+                  <input
+                    {...field("Projects")}
+                    style={inputStyle}
+                    type="number"
+                    min="0"
+                    required
+                  />
+                </label>
+                <label className="auth-field">
+                  Certifications
+                  <input
+                    {...field("Certifications")}
+                    style={inputStyle}
+                    type="number"
+                    min="0"
+                    required
+                  />
+                </label>
+                <label className="auth-field">
+                  Communication Skills
+                  <input
+                    {...field("Communication_Skills")}
+                    style={inputStyle}
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="100"
+                    required
+                  />
+                </label>
+                <label className="auth-field">
+                  Aptitude Score
+                  <input
+                    {...field("Aptitude_Score")}
+                    style={inputStyle}
+                    type="number"
+                    min="0"
+                    max="100"
+                    required
+                  />
+                </label>
+                <label className="auth-field">
+                  Backlogs
+                  <input
+                    {...field("Backlogs")}
+                    style={inputStyle}
+                    type="number"
+                    min="0"
+                    required
+                  />
+                </label>
+              </div>
+              <button
+                className="primary"
+                type="submit"
+                disabled={loading}
+                style={{ marginTop: 12 }}
+              >
+                {loading
+                  ? "Saving & predicting..."
+                  : "Save changes and re-predict"}
+              </button>
+              {error && (
+                <div
+                  className="status-line"
+                  style={{ color: "red", marginTop: 8 }}
+                >
+                  {error}
+                </div>
+              )}
+              {success && (
+                <div
+                  className="status-line"
+                  style={{ color: "green", marginTop: 8 }}
+                >
+                  {success}
+                </div>
+              )}
+            </form>
+          </section>
         );
       }
 
@@ -1267,10 +1632,15 @@
           setLoginError("");
           setPageError("");
           try {
-            const endpoint = authMode === "login" ? "/api/auth/login" : "/api/auth/register";
-            const bodyPayload = authMode === "login" 
-                ? { username: loginForm.username, password: loginForm.password } 
-                : { ...loginForm, student_id: loginForm.role === "student" ? 100 : null };
+            const endpoint =
+              authMode === "login" ? "/api/auth/login" : "/api/auth/register";
+            const bodyPayload =
+              authMode === "login"
+                ? { username: loginForm.username, password: loginForm.password }
+                : {
+                    ...loginForm,
+                    student_id: loginForm.role === "student" ? 100 : null,
+                  };
             const payload = await requestJSON(endpoint, null, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -1356,7 +1726,11 @@
                             username: event.target.value,
                           }))
                         }
-                        placeholder={authMode === "login" ? "Enter username" : "Choose username"}
+                        placeholder={
+                          authMode === "login"
+                            ? "Enter username"
+                            : "Choose username"
+                        }
                         required
                       />
                     </label>
@@ -1371,7 +1745,11 @@
                             password: event.target.value,
                           }))
                         }
-                        placeholder={authMode === "login" ? "Enter password" : "Choose password"}
+                        placeholder={
+                          authMode === "login"
+                            ? "Enter password"
+                            : "Choose password"
+                        }
                         required
                       />
                     </label>
@@ -1386,7 +1764,7 @@
                             borderRadius: "14px",
                             padding: "12px 14px",
                             font: "inherit",
-                            outline: "none"
+                            outline: "none",
                           }}
                           value={loginForm.role}
                           onChange={(e) =>
@@ -1419,10 +1797,19 @@
                       </label>
                     )}
                     <button className="primary" type="submit">
-                      {loadingSession ? "Checking session..." : (authMode === "login" ? "Login" : "Register")}
+                      {loadingSession
+                        ? "Checking session..."
+                        : authMode === "login"
+                          ? "Login"
+                          : "Register"}
                     </button>
                     {loginError ? (
-                      <div className="status-line" style={{ color: "red", marginTop: 8 }}>{loginError}</div>
+                      <div
+                        className="status-line"
+                        style={{ color: "red", marginTop: 8 }}
+                      >
+                        {loginError}
+                      </div>
                     ) : null}
                   </form>
 
@@ -1430,14 +1817,26 @@
                     {authMode === "login" ? (
                       <p>
                         Don't have an account?{" "}
-                        <a href="#register" onClick={(e) => { e.preventDefault(); setAuthMode("register"); }}>
+                        <a
+                          href="#register"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            setAuthMode("register");
+                          }}
+                        >
                           Register here
                         </a>
                       </p>
                     ) : (
                       <p>
                         Already have an account?{" "}
-                        <a href="#login" onClick={(e) => { e.preventDefault(); setAuthMode("login"); }}>
+                        <a
+                          href="#login"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            setAuthMode("login");
+                          }}
+                        >
                           Login here
                         </a>
                       </p>
@@ -1445,13 +1844,15 @@
                   </div>
 
                   {pageError ? (
-                    <div className="status-line" style={{ marginTop: 14, color: "red" }}>
+                    <div
+                      className="status-line"
+                      style={{ marginTop: 14, color: "red" }}
+                    >
                       {pageError}
                     </div>
                   ) : null}
                 </div>
               </div>
-
             </div>
           );
         }
@@ -1675,7 +2076,12 @@
                   <h2>Add New Student</h2>
                   <span>Admin: Register student + run AI prediction</span>
                 </div>
-                <AddStudentForm token={token} onSuccess={async () => { await refreshSession(token); }} />
+                <AddStudentForm
+                  token={token}
+                  onSuccess={async () => {
+                    await refreshSession(token);
+                  }}
+                />
               </section>
             )}
 
@@ -1768,48 +2174,87 @@
             return <div className="section-empty">No profile selected.</div>;
           }
 
+          const handleSelfSave = (updatedProfile) => {
+            if (!updatedProfile) {
+              return;
+            }
+            setStudents((current) =>
+              current.map((item) =>
+                Number(item.student_id) === Number(updatedProfile.student_id)
+                  ? updatedProfile
+                  : item,
+              ),
+            );
+            setBootstrap((current) =>
+              current
+                ? {
+                    ...current,
+                    students: current.students?.map((item) =>
+                      Number(item.student_id) ===
+                      Number(updatedProfile.student_id)
+                        ? updatedProfile
+                        : item,
+                    ) || [updatedProfile],
+                  }
+                : current,
+            );
+            setSelectedStudentId(updatedProfile.student_id);
+            setStudentQueryId(String(updatedProfile.student_id));
+            setPageNotice("Profile updated and prediction refreshed.");
+          };
+
           return (
-            <div className="section-card">
-              <div className="section-title">
-                <h2>
-                  {profile.display_name ||
-                    profile.username ||
-                    `Student ${profile.student_id}`}
-                </h2>
-                <span>{profile.branch || "Profile"}</span>
+            <div className="section-stack">
+              <div className="section-card">
+                <div className="section-title">
+                  <h2>
+                    {profile.display_name ||
+                      profile.username ||
+                      `Student ${profile.student_id}`}
+                  </h2>
+                  <span>{profile.branch || "Profile"}</span>
+                </div>
+                <div className="overview-grid">
+                  <div className="overview-card">
+                    <div className="overview-label">Placement</div>
+                    <div className="overview-value">{profile.placement}</div>
+                  </div>
+                  <div className="overview-card">
+                    <div className="overview-label">Probability</div>
+                    <div className="overview-value">
+                      {formatValue(profile.probability, "N/A")}%
+                    </div>
+                  </div>
+                  <div className="overview-card">
+                    <div className="overview-label">Readiness</div>
+                    <div className="overview-value">
+                      {formatValue(profile.readiness_score, "N/A")}
+                    </div>
+                  </div>
+                  <div className="overview-card">
+                    <div className="overview-label">Student ID</div>
+                    <div className="overview-value">
+                      {formatValue(profile.student_id)}
+                    </div>
+                  </div>
+                </div>
+                <div className="mini-grid" style={{ marginTop: 18 }}>
+                  {Object.entries(profile.profile || {}).map(([key, value]) => (
+                    <div className="mini" key={key}>
+                      <div className="mini-label">{key.replace(/_/g, " ")}</div>
+                      <div className="mini-value">{formatValue(value)}</div>
+                    </div>
+                  ))}
+                </div>
               </div>
-              <div className="overview-grid">
-                <div className="overview-card">
-                  <div className="overview-label">Placement</div>
-                  <div className="overview-value">{profile.placement}</div>
-                </div>
-                <div className="overview-card">
-                  <div className="overview-label">Probability</div>
-                  <div className="overview-value">
-                    {formatValue(profile.probability, "N/A")}%
-                  </div>
-                </div>
-                <div className="overview-card">
-                  <div className="overview-label">Readiness</div>
-                  <div className="overview-value">
-                    {formatValue(profile.readiness_score, "N/A")}
-                  </div>
-                </div>
-                <div className="overview-card">
-                  <div className="overview-label">Student ID</div>
-                  <div className="overview-value">
-                    {formatValue(profile.student_id)}
-                  </div>
-                </div>
-              </div>
-              <div className="mini-grid" style={{ marginTop: 18 }}>
-                {Object.entries(profile.profile || {}).map(([key, value]) => (
-                  <div className="mini" key={key}>
-                    <div className="mini-label">{key.replace(/_/g, " ")}</div>
-                    <div className="mini-value">{formatValue(value)}</div>
-                  </div>
-                ))}
-              </div>
+
+              {isStudent && (
+                <StudentSelfUpdateForm
+                  token={token}
+                  profile={profile}
+                  onSaved={handleSelfSave}
+                />
+              )}
             </div>
           );
         };

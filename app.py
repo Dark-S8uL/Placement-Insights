@@ -484,6 +484,69 @@ def get_row_for_student(student_id):
     return STUDENT_INDEX.get(normalize_student_id(student_id))
 
 
+def dataset_fieldnames():
+    if DATASET_PATH.exists():
+        with DATASET_PATH.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = DictReader(handle)
+            if reader.fieldnames:
+                return list(reader.fieldnames)
+
+    fieldnames = []
+    seen = set()
+    for row in ROWS:
+        for key in row.keys():
+            if key not in seen:
+                seen.add(key)
+                fieldnames.append(key)
+    return fieldnames
+
+
+def persist_rows_to_dataset():
+    fieldnames = dataset_fieldnames()
+    if not fieldnames:
+        return
+
+    with DATASET_PATH.open("w", encoding="utf-8-sig", newline="") as handle:
+        writer = DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in ROWS:
+            writer.writerow({field: row.get(field, "") for field in fieldnames})
+
+
+def normalize_student_row(row):
+    normalized = dict(row)
+    normalized["student_id"] = normalize_student_id(row.get("student_id") or row.get("StudentID"))
+    return normalized
+
+
+def update_student_record(student_id, updates):
+    global insights
+
+    target_id = normalize_student_id(student_id)
+    if target_id is None:
+        raise HTTPException(status_code=400, detail="Student ID is required")
+
+    row = get_row_for_student(target_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Student not found")
+
+    updated_row = dict(row)
+    for key, value in updates.items():
+        updated_row[key] = value
+
+    updated_row = normalize_student_row(updated_row)
+
+    for index, existing in enumerate(ROWS):
+        if normalize_student_id(existing.get("student_id") or existing.get("StudentID")) == target_id:
+            ROWS[index] = updated_row
+            break
+
+    STUDENT_INDEX[target_id] = updated_row
+    persist_rows_to_dataset()
+    insights = build_insights(ROWS)
+    return build_student_profile(updated_row)
+
+
 def csv_response(filename, csv_text):
     return Response(
         content=csv_text,
@@ -697,6 +760,16 @@ class AddStudentDataRequest(BaseModel):
     Communication_Skills: float
     Aptitude_Score: float
     Backlogs: float
+
+
+class StudentProfileUpdateRequest(BaseModel):
+    CGPA: float = Field(ge=0, le=10)
+    Internships: float = Field(ge=0)
+    Projects: float = Field(ge=0)
+    Certifications: float = Field(ge=0)
+    Communication_Skills: float = Field(ge=0, le=100)
+    Aptitude_Score: float = Field(ge=0, le=100)
+    Backlogs: float = Field(ge=0)
 
 
 ROWS = load_rows()
@@ -963,21 +1036,10 @@ def create_student(payload: AddStudentDataRequest, current_user: Dict[str, Any] 
     
     ROWS.append(new_row)
     STUDENT_INDEX[payload.student_id] = new_row
+    persist_rows_to_dataset()
     
     # Recalculate statistics dynamically
     insights = build_insights(ROWS)
-    
-    # Write persistently to CSV
-    try:
-        import csv
-        file_exists = DATASET_PATH.exists()
-        with DATASET_PATH.open("a", encoding="utf-8-sig", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(new_row.keys()))
-            if not file_exists:
-                writer.writeheader()
-            writer.writerow(new_row)
-    except Exception as e:
-        print("Failed to write to final_dataset.csv", e)
     
     # 2. Create actual User Authentication
     created = db_create_user(
@@ -990,6 +1052,35 @@ def create_student(payload: AddStudentDataRequest, current_user: Dict[str, Any] 
     if not created:
         raise HTTPException(status_code=500, detail="Failed to create user account")
     return get_user_public(created)
+
+
+@app.put("/api/student/profile")
+def update_own_student_profile(payload: StudentProfileUpdateRequest, current_user: Dict[str, Any] = Depends(get_current_user)):
+    if current_user.get("role") != "student":
+        raise HTTPException(status_code=403, detail="Student access required")
+
+    student_id = normalize_student_id(current_user.get("student_id"))
+    if student_id is None:
+        raise HTTPException(status_code=400, detail="Student ID is missing")
+
+    updated_profile = update_student_record(
+        student_id,
+        {
+            "CGPA": float(payload.CGPA),
+            "Internships": float(payload.Internships),
+            "Projects": float(payload.Projects),
+            "Certifications": float(payload.Certifications),
+            "Communication_Skills": float(payload.Communication_Skills),
+            "Aptitude_Score": float(payload.Aptitude_Score),
+            "Backlogs": float(payload.Backlogs),
+        },
+    )
+
+    return {
+        "message": "Profile updated and prediction refreshed",
+        "profile": updated_profile,
+        "user": get_user_public(current_user),
+    }
 
 
 @app.get("/api/students/{student_id}")
