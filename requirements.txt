@@ -9,3 +9,4 @@ passlib[bcrypt]
 python-dotenv
 pandas
 python-multipart
+reportlab

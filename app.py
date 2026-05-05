@@ -1,11 +1,15 @@
 from collections import Counter, defaultdict
 from csv import DictReader, DictWriter, reader as CsvReader
 from datetime import date, datetime
-from io import StringIO
+from io import BytesIO, StringIO
 import json
 from pathlib import Path
+import re
 from statistics import mean
 from typing import Any, Dict, List, Optional
+from urllib import error as urllib_error
+from urllib import parse as urllib_parse
+from urllib import request as urllib_request
 from uuid import uuid4
 
 import joblib
@@ -110,6 +114,16 @@ def init_db():
             max_backlogs REAL NOT NULL,
             created_by TEXT,
             created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS resume_data (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER UNIQUE,
+            resume_json TEXT NOT NULL,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
         )
         """
     )
@@ -231,6 +245,60 @@ def db_create_job_posting(form_name: str, job_link: str, min_cgpa: float, max_ba
         if posting["id"] == posting_id:
             return posting
     return None
+
+
+def db_get_user_by_student_id(student_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT id,username,role,display_name,student_id FROM users WHERE role = 'student' AND student_id = ? LIMIT 1",
+        (student_id,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {
+        "id": row[0],
+        "username": row[1],
+        "role": row[2],
+        "display_name": row[3],
+        "student_id": row[4],
+    }
+
+
+def db_get_resume(student_id: int):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT resume_json FROM resume_data WHERE student_id = ? LIMIT 1",
+        (student_id,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        return None
+    try:
+        return json.loads(row[0])
+    except Exception:
+        return None
+
+
+def db_upsert_resume(student_id: int, resume_payload: Dict[str, Any]):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    resume_json = json.dumps(resume_payload, ensure_ascii=False)
+    cur.execute(
+        """
+        INSERT INTO resume_data (student_id, resume_json, updated_at)
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(student_id)
+        DO UPDATE SET resume_json = excluded.resume_json, updated_at = CURRENT_TIMESTAMP
+        """,
+        (student_id, resume_json),
+    )
+    conn.commit()
+    conn.close()
 
 
 @app.on_event("startup")
@@ -1255,6 +1323,417 @@ def dataset_predictions_csv():
     return output.getvalue()
 
 
+RESUME_FIELDS = [
+    "full_name",
+    "headline",
+    "email",
+    "phone",
+    "location",
+    "linkedin",
+    "leetcode",
+    "github",
+    "summary",
+    "education",
+    "education_1",
+    "education_2",
+    "education_3",
+    "experience",
+    "experience_1_title",
+    "experience_1_meta",
+    "experience_1_points",
+    "projects",
+    "project_1_title",
+    "project_1_link",
+    "project_1_points",
+    "project_2_title",
+    "project_2_link",
+    "project_2_points",
+    "skills",
+    "skills_programming",
+    "skills_frontend",
+    "skills_backend",
+    "skills_databases",
+    "skills_tools",
+    "certifications",
+    "achievements",
+]
+
+
+def default_resume_payload(display_name: Optional[str] = None):
+    return {
+        "full_name": display_name or "",
+        "headline": "",
+        "email": "",
+        "phone": "",
+        "location": "",
+        "linkedin": "",
+        "leetcode": "",
+        "github": "",
+        "summary": "",
+        "education": "",
+        "education_1": "",
+        "education_2": "",
+        "education_3": "",
+        "experience": "",
+        "experience_1_title": "",
+        "experience_1_meta": "",
+        "experience_1_points": "",
+        "projects": "",
+        "project_1_title": "",
+        "project_1_link": "",
+        "project_1_points": "",
+        "project_2_title": "",
+        "project_2_link": "",
+        "project_2_points": "",
+        "skills": "",
+        "skills_programming": "",
+        "skills_frontend": "",
+        "skills_backend": "",
+        "skills_databases": "",
+        "skills_tools": "",
+        "certifications": "",
+        "achievements": "",
+    }
+
+
+def normalize_resume_payload(payload: Dict[str, Any], display_name: Optional[str] = None):
+    normalized = default_resume_payload(display_name)
+    for key in RESUME_FIELDS:
+        value = payload.get(key)
+        normalized[key] = str(value).strip() if value is not None else ""
+    if not normalized["full_name"] and display_name:
+        normalized["full_name"] = display_name
+    return normalized
+
+
+def _extract_first_json_object(raw_text: str) -> Optional[Dict[str, Any]]:
+    text = (raw_text or "").strip()
+    if not text:
+        return None
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?", "", text, flags=re.IGNORECASE).strip()
+        text = re.sub(r"```$", "", text).strip()
+
+    try:
+        data = json.loads(text)
+        return data if isinstance(data, dict) else None
+    except Exception:
+        pass
+
+    match = re.search(r"\{.*\}", text, flags=re.DOTALL)
+    if not match:
+        return None
+    try:
+        data = json.loads(match.group(0))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def polish_resume_with_gemini(resume_payload: Dict[str, Any]) -> Dict[str, Any]:
+    api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+    if not api_key:
+        return resume_payload
+
+    model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+    endpoint = (
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+        f"?key={urllib_parse.quote(api_key)}"
+    )
+
+    prompt = {
+        "instruction": (
+            "Rewrite this student resume content into concise, professional, ATS-friendly text. "
+            "Keep facts truthful to source content, improve alignment, grammar, and bullet structure, "
+            "and do not invent employers, dates, scores, or certifications."
+        ),
+        "required_output": {
+            "format": "JSON object only",
+            "fields": RESUME_FIELDS,
+            "rules": [
+                "Return every field as a string.",
+                "Preserve full_name, email, phone, location, linkedin, github as factual contact fields.",
+                "Use clear bullet-like lines in experience/projects/skills/certifications/achievements separated by newline.",
+                "Keep summary to 2-4 lines.",
+            ],
+        },
+        "resume": resume_payload,
+    }
+
+    body = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": json.dumps(prompt, ensure_ascii=False),
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": 0.2,
+            "responseMimeType": "application/json",
+        },
+    }
+
+    try:
+        request = urllib_request.Request(
+            endpoint,
+            data=json.dumps(body).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib_request.urlopen(request, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        text = (
+            payload.get("candidates", [{}])[0]
+            .get("content", {})
+            .get("parts", [{}])[0]
+            .get("text", "")
+        )
+        parsed = _extract_first_json_object(text)
+        if not parsed:
+            return resume_payload
+        polished = normalize_resume_payload(parsed, resume_payload.get("full_name"))
+        polished["email"] = resume_payload.get("email", "")
+        polished["phone"] = resume_payload.get("phone", "")
+        polished["location"] = resume_payload.get("location", "")
+        polished["linkedin"] = resume_payload.get("linkedin", "")
+        polished["github"] = resume_payload.get("github", "")
+        return polished
+    except (urllib_error.URLError, urllib_error.HTTPError, TimeoutError, KeyError, ValueError, json.JSONDecodeError):
+        return resume_payload
+
+
+def build_resume_pdf_bytes(resume_payload: Dict[str, Any]):
+    try:
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import A4
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="PDF generation dependency is missing. Install reportlab to enable resume download.",
+        )
+
+    normalized = normalize_resume_payload(resume_payload)
+    professional = polish_resume_with_gemini(normalized)
+
+    def paragraph_text(value: str) -> str:
+        return (value or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br/>")
+
+    def to_lines(value: str) -> List[str]:
+        raw = (value or "").replace("\r", "\n")
+        split_lines = [line.strip(" -•\t") for line in raw.split("\n") if line.strip()]
+        if len(split_lines) == 1:
+            parts = [part.strip() for part in re.split(r"[;|]", split_lines[0]) if part.strip()]
+            if len(parts) > 1:
+                return parts
+        return split_lines
+
+    buffer = BytesIO()
+    document = SimpleDocTemplate(
+        buffer,
+        pagesize=A4,
+        leftMargin=42,
+        rightMargin=42,
+        topMargin=34,
+        bottomMargin=34,
+    )
+
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        "ResumeTitle",
+        parent=styles["Heading1"],
+        fontSize=21,
+        leading=24,
+        spaceAfter=6,
+        textColor=colors.HexColor("#0f172a"),
+    )
+    section_style = ParagraphStyle(
+        "ResumeSection",
+        parent=styles["Heading2"],
+        fontSize=11.5,
+        leading=14,
+        spaceAfter=3,
+        spaceBefore=8,
+        textColor=colors.HexColor("#115e59"),
+    )
+    body_style = ParagraphStyle(
+        "ResumeBody",
+        parent=styles["BodyText"],
+        fontSize=10,
+        leading=13.5,
+        textColor=colors.HexColor("#111827"),
+    )
+    bullet_style = ParagraphStyle(
+        "ResumeBullet",
+        parent=body_style,
+        leftIndent=10,
+        bulletIndent=2,
+        spaceBefore=1,
+        spaceAfter=1,
+    )
+
+    story = []
+
+    contact_parts = [
+        professional.get("phone", ""),
+        professional.get("email", ""),
+        professional.get("linkedin", ""),
+        professional.get("leetcode", ""),
+        professional.get("github", ""),
+    ]
+    contact_lines = [part for part in contact_parts if part]
+
+    header_left = [
+        Paragraph(professional["full_name"] or "Student Resume", title_style),
+    ]
+    if professional.get("location"):
+        header_left.append(Paragraph(paragraph_text(professional["location"]), body_style))
+    if professional.get("headline"):
+        header_left.append(Paragraph(paragraph_text(professional["headline"]), body_style))
+
+    header_right = []
+    for item in contact_lines:
+        header_right.append(Paragraph(paragraph_text(item), body_style))
+
+    if header_right:
+        header_table = Table(
+            [[header_left, header_right]],
+            colWidths=[A4[0] * 0.62 - 42, A4[0] * 0.38 - 42],
+            hAlign="LEFT",
+        )
+        header_table.setStyle(
+            TableStyle(
+                [
+                    ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                    ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                    ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                    ("TOPPADDING", (0, 0), (-1, -1), 0),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+                ]
+            )
+        )
+        story.append(header_table)
+    else:
+        story.append(Paragraph(professional["full_name"] or "Student Resume", title_style))
+        if professional.get("headline"):
+            story.append(Paragraph(paragraph_text(professional["headline"]), body_style))
+
+    divider = Table([[""]], colWidths=[A4[0] - 84], rowHeights=[1])
+    divider.setStyle(
+        TableStyle(
+            [
+                ("LINEABOVE", (0, 0), (-1, -1), 0.6, colors.HexColor("#94a3b8")),
+            ]
+        )
+    )
+    story.append(Spacer(1, 4))
+    story.append(divider)
+    story.append(Spacer(1, 8))
+
+    if professional.get("summary"):
+        story.append(Paragraph("Profile Summary", section_style))
+        story.append(Paragraph(paragraph_text(professional["summary"]), body_style))
+        story.append(Spacer(1, 6))
+
+    education_lines = [
+        professional.get("education_1", ""),
+        professional.get("education_2", ""),
+        professional.get("education_3", ""),
+    ]
+    if not any(education_lines) and professional.get("education"):
+        education_lines = to_lines(professional.get("education", ""))
+    education_lines = [line for line in education_lines if line]
+    if education_lines:
+        story.append(Paragraph("Education", section_style))
+        for line in education_lines:
+            story.append(Paragraph(paragraph_text(line), body_style))
+        story.append(Spacer(1, 6))
+
+    skill_rows = [
+        ("Programming", professional.get("skills_programming", "")),
+        ("Frontend", professional.get("skills_frontend", "")),
+        ("Backend", professional.get("skills_backend", "")),
+        ("Databases", professional.get("skills_databases", "")),
+        ("Tools", professional.get("skills_tools", "")),
+    ]
+    if any(value for _, value in skill_rows) or professional.get("skills"):
+        story.append(Paragraph("Technical Skills", section_style))
+        for label, value in skill_rows:
+            if not value:
+                continue
+            story.append(Paragraph(paragraph_text(f"{label}: {value}"), body_style))
+        if professional.get("skills"):
+            story.append(Paragraph(paragraph_text(professional["skills"]), body_style))
+        story.append(Spacer(1, 6))
+
+    experience_title = professional.get("experience_1_title", "")
+    experience_meta = professional.get("experience_1_meta", "")
+    experience_points = professional.get("experience_1_points", "")
+    if experience_title or experience_meta or experience_points or professional.get("experience"):
+        story.append(Paragraph("Experience", section_style))
+        if experience_title:
+            story.append(Paragraph(paragraph_text(experience_title), body_style))
+        if experience_meta:
+            story.append(Paragraph(paragraph_text(experience_meta), body_style))
+        exp_lines = to_lines(experience_points or professional.get("experience", ""))
+        for line in exp_lines:
+            story.append(Paragraph(paragraph_text(line), bullet_style, bulletText="•"))
+        story.append(Spacer(1, 6))
+
+    project_blocks = [
+        (
+            professional.get("project_1_title", ""),
+            professional.get("project_1_link", ""),
+            professional.get("project_1_points", ""),
+        ),
+        (
+            professional.get("project_2_title", ""),
+            professional.get("project_2_link", ""),
+            professional.get("project_2_points", ""),
+        ),
+    ]
+    has_structured_projects = any(title or link or points for title, link, points in project_blocks)
+    if has_structured_projects or professional.get("projects"):
+        story.append(Paragraph("Projects", section_style))
+        if has_structured_projects:
+            for title, link, points in project_blocks:
+                if not (title or link or points):
+                    continue
+                heading = title or "Project"
+                if link:
+                    heading = f"{heading} ({link})"
+                story.append(Paragraph(paragraph_text(heading), body_style))
+                for line in to_lines(points):
+                    story.append(Paragraph(paragraph_text(line), bullet_style, bulletText="•"))
+                story.append(Spacer(1, 3))
+        else:
+            for line in to_lines(professional.get("projects", "")):
+                story.append(Paragraph(paragraph_text(line), bullet_style, bulletText="•"))
+        story.append(Spacer(1, 5))
+
+    if professional.get("certifications"):
+        story.append(Paragraph("Certifications", section_style))
+        for line in to_lines(professional["certifications"]):
+            story.append(Paragraph(paragraph_text(line), bullet_style, bulletText="•"))
+        story.append(Spacer(1, 5))
+
+    if professional.get("achievements"):
+        story.append(Paragraph("Achievements", section_style))
+        for line in to_lines(professional["achievements"]):
+            story.append(Paragraph(paragraph_text(line), bullet_style, bulletText="•"))
+        story.append(Spacer(1, 4))
+
+    if len(story) <= 2:
+        story.append(Paragraph("Add your resume details and download again.", body_style))
+
+    document.build(story)
+    return buffer.getvalue()
+
+
 class PlacementInput(BaseModel):
     CGPA: float = Field(ge=0, le=10)
     Internships: float = Field(ge=0)
@@ -1328,6 +1807,41 @@ class JobPostingRequest(BaseModel):
     job_link: str
     min_cgpa: float = Field(ge=0, le=10)
     max_backlogs: float = Field(ge=0)
+
+
+class ResumeRequest(BaseModel):
+    full_name: str = ""
+    headline: str = ""
+    email: str = ""
+    phone: str = ""
+    location: str = ""
+    linkedin: str = ""
+    leetcode: str = ""
+    github: str = ""
+    summary: str = ""
+    education: str = ""
+    education_1: str = ""
+    education_2: str = ""
+    education_3: str = ""
+    experience: str = ""
+    experience_1_title: str = ""
+    experience_1_meta: str = ""
+    experience_1_points: str = ""
+    projects: str = ""
+    project_1_title: str = ""
+    project_1_link: str = ""
+    project_1_points: str = ""
+    project_2_title: str = ""
+    project_2_link: str = ""
+    project_2_points: str = ""
+    skills: str = ""
+    skills_programming: str = ""
+    skills_frontend: str = ""
+    skills_backend: str = ""
+    skills_databases: str = ""
+    skills_tools: str = ""
+    certifications: str = ""
+    achievements: str = ""
 
 
 ROWS = load_rows()
@@ -1848,6 +2362,71 @@ def update_own_student_profile(payload: StudentProfileUpdateRequest, current_use
         "profile": updated_profile,
         "user": get_user_public(current_user),
     }
+
+
+@app.get("/api/student/resume")
+def get_student_resume(current_user: Dict[str, Any] = Depends(get_current_user)):
+    if current_user.get("role") != "student":
+        raise HTTPException(status_code=403, detail="Student access required")
+    student_id = normalize_student_id(current_user.get("student_id"))
+    if student_id is None:
+        raise HTTPException(status_code=400, detail="Student ID is missing")
+
+    resume_payload = db_get_resume(student_id)
+    if resume_payload is None:
+        resume_payload = default_resume_payload(current_user.get("display_name") or current_user.get("username"))
+    else:
+        resume_payload = normalize_resume_payload(
+            resume_payload,
+            current_user.get("display_name") or current_user.get("username"),
+        )
+    return {"resume": resume_payload}
+
+
+@app.put("/api/student/resume")
+def save_student_resume(payload: ResumeRequest, current_user: Dict[str, Any] = Depends(get_current_user)):
+    if current_user.get("role") != "student":
+        raise HTTPException(status_code=403, detail="Student access required")
+    student_id = normalize_student_id(current_user.get("student_id"))
+    if student_id is None:
+        raise HTTPException(status_code=400, detail="Student ID is missing")
+
+    normalized = normalize_resume_payload(
+        payload.dict(),
+        current_user.get("display_name") or current_user.get("username"),
+    )
+    db_upsert_resume(student_id, normalized)
+    return {"message": "Resume saved successfully.", "resume": normalized}
+
+
+@app.get("/api/download/resume.pdf")
+def download_resume_pdf(student_id: Optional[int] = None, current_user: Dict[str, Any] = Depends(get_current_user)):
+    if current_user.get("role") == "admin":
+        target_id = normalize_student_id(student_id)
+        if target_id is None:
+            raise HTTPException(status_code=400, detail="student_id is required for admin download.")
+        target_user = db_get_user_by_student_id(target_id)
+    else:
+        target_id = normalize_student_id(current_user.get("student_id"))
+        if target_id is None:
+            raise HTTPException(status_code=400, detail="Student ID is missing")
+        target_user = db_get_user_by_student_id(target_id)
+
+    resume_payload = db_get_resume(target_id)
+    if resume_payload is None:
+        raise HTTPException(status_code=404, detail="Resume not found. Save resume data first.")
+
+    display_name = None
+    if target_user:
+        display_name = target_user.get("display_name") or target_user.get("username")
+    normalized_resume = normalize_resume_payload(resume_payload, display_name)
+    pdf_bytes = build_resume_pdf_bytes(normalized_resume)
+    safe_name = "".join(character if character.isalnum() else "_" for character in (normalized_resume.get("full_name") or "resume")).strip("_") or "resume"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}_resume.pdf"'},
+    )
 
 
 @app.get("/api/students/{student_id}")

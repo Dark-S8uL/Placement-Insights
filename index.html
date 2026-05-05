@@ -305,7 +305,8 @@
       }
 
       input,
-      select {
+      select,
+      textarea {
         width: 100%;
         border: 1px solid rgba(31, 35, 40, 0.12);
         background: rgba(255, 255, 255, 0.9);
@@ -320,7 +321,8 @@
       }
 
       input:focus,
-      select:focus {
+      select:focus,
+      textarea:focus {
         border-color: var(--accent);
         box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
         transform: translateY(-1px);
@@ -1048,6 +1050,75 @@
           Aptitude_Score: source.Aptitude_Score ?? "",
           Backlogs: source.Backlogs ?? "",
         };
+      }
+
+      function resumeDraft(resume = {}) {
+        return {
+          full_name: resume.full_name || "",
+          headline: resume.headline || "",
+          email: resume.email || "",
+          phone: resume.phone || "",
+          location: resume.location || "",
+          linkedin: resume.linkedin || "",
+          leetcode: resume.leetcode || "",
+          github: resume.github || "",
+          summary: resume.summary || "",
+          education: resume.education || "",
+          education_1: resume.education_1 || "",
+          education_2: resume.education_2 || "",
+          education_3: resume.education_3 || "",
+          experience: resume.experience || "",
+          experience_1_title: resume.experience_1_title || "",
+          experience_1_meta: resume.experience_1_meta || "",
+          experience_1_points: resume.experience_1_points || "",
+          projects: resume.projects || "",
+          project_1_title: resume.project_1_title || "",
+          project_1_link: resume.project_1_link || "",
+          project_1_points: resume.project_1_points || "",
+          project_2_title: resume.project_2_title || "",
+          project_2_link: resume.project_2_link || "",
+          project_2_points: resume.project_2_points || "",
+          skills: resume.skills || "",
+          skills_programming: resume.skills_programming || "",
+          skills_frontend: resume.skills_frontend || "",
+          skills_backend: resume.skills_backend || "",
+          skills_databases: resume.skills_databases || "",
+          skills_tools: resume.skills_tools || "",
+          certifications: resume.certifications || "",
+          achievements: resume.achievements || "",
+        };
+      }
+
+      function ResumeInput({
+        label,
+        value,
+        onChange,
+        placeholder,
+        multiline = false,
+        rows = 3,
+        onKeyDownHandler = null,
+      }) {
+        return (
+          <label className="auth-field">
+            {label}
+            {multiline ? (
+              <textarea
+                rows={rows}
+                defaultValue={value}
+                onBlur={(event) => onChange(event.target.value)}
+                onKeyDown={onKeyDownHandler || undefined}
+                placeholder={placeholder}
+              />
+            ) : (
+              <input
+                defaultValue={value}
+                onBlur={(event) => onChange(event.target.value)}
+                onKeyDown={onKeyDownHandler || undefined}
+                placeholder={placeholder}
+              />
+            )}
+          </label>
+        );
       }
 
       function AddStudentForm({ token, onSuccess }) {
@@ -1841,6 +1912,11 @@
         const [improvementDepartment, setImprovementDepartment] = useState("");
         const [academicScope, setAcademicScope] = useState("overall");
         const [academicDepartment, setAcademicDepartment] = useState("");
+        const [resumeForm, setResumeForm] = useState(resumeDraft());
+        const [resumeLoaded, setResumeLoaded] = useState(false);
+        const [resumeFormVersion, setResumeFormVersion] = useState(0);
+        const [loadingResume, setLoadingResume] = useState(false);
+        const [savingResume, setSavingResume] = useState(false);
 
         const [loadingSession, setLoadingSession] = useState(Boolean(token));
         const [loginError, setLoginError] = useState("");
@@ -1883,6 +1959,9 @@
               setStudents([]);
               setSelectedStudentId(null);
               setStudentQueryId("");
+              setResumeForm(resumeDraft());
+              setResumeLoaded(false);
+              setResumeFormVersion(0);
               go("login");
               return;
             }
@@ -1905,6 +1984,9 @@
             setStudents([]);
             setSelectedStudentId(null);
             setStudentQueryId("");
+            setResumeForm(resumeDraft());
+            setResumeLoaded(false);
+            setResumeFormVersion(0);
             setPageError(error.message);
             go("login");
           } finally {
@@ -1953,6 +2035,17 @@
         }, [route.page, route.param]);
 
         useEffect(() => {
+          if (
+            route.page === "resume" &&
+            user?.role === "student" &&
+            token &&
+            !resumeLoaded
+          ) {
+            loadResume();
+          }
+        }, [route.page, user, token, resumeLoaded]);
+
+        useEffect(() => {
           setStudentPage((current) => {
             const pageCount = Math.max(1, Math.ceil(students.length / 5));
             return Math.min(current, pageCount);
@@ -1979,6 +2072,7 @@
           return [
             { page: "dashboard", label: "Dashboard" },
             { page: "profile", label: "My Profile" },
+            { page: "resume", label: "Resume" },
             { page: "downloads", label: "Downloads" },
           ];
         }, [isAdmin]);
@@ -2111,6 +2205,9 @@
             setStudents([]);
             setSelectedStudentId(null);
             setStudentQueryId("");
+            setResumeForm(resumeDraft());
+            setResumeLoaded(false);
+            setResumeFormVersion(0);
             go("login");
           }
         };
@@ -2157,6 +2254,60 @@
           } finally {
             setBusyDownload("");
           }
+        };
+
+        const loadResume = async () => {
+          if (!token || !isStudent) {
+            return;
+          }
+          setLoadingResume(true);
+          setPageError("");
+          try {
+            const payload = await requestJSON("/api/student/resume", token);
+            setResumeForm(resumeDraft(payload.resume || {}));
+            setResumeLoaded(true);
+            setResumeFormVersion((current) => current + 1);
+          } catch (error) {
+            setPageError(error.message);
+          } finally {
+            setLoadingResume(false);
+          }
+        };
+
+        const saveResume = async () => {
+          if (!token || !isStudent) {
+            return;
+          }
+          setSavingResume(true);
+          setPageError("");
+          setPageNotice("");
+          try {
+            const payload = await requestJSON("/api/student/resume", token, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(resumeForm),
+            });
+            setResumeForm(resumeDraft(payload.resume || {}));
+            setResumeFormVersion((current) => current + 1);
+            setPageNotice(payload.message || "Resume saved successfully.");
+            setResumeLoaded(true);
+          } catch (error) {
+            setPageError(error.message);
+          } finally {
+            setSavingResume(false);
+          }
+        };
+
+        const downloadResumePdf = async () => {
+          // Single professional download flow handled server-side.
+          await downloadCsv("/api/download/resume.pdf", "my_resume.pdf");
+        };
+
+        const _stopKeyPropagation = (e) => {
+          // Prevent global key handlers from stealing focus while typing
+          // in resume builder fields (space, enter, etc.). Do not prevent
+          // default so characters still insert.
+          e.stopPropagation();
         };
 
         const loadRankingDepartments = async () => {
@@ -2266,6 +2417,8 @@
               start_date: "",
               end_date: "",
             });
+            setResumeForm(resumeDraft());
+            setResumeLoaded(false);
           }
         }, [isAdmin, token]);
 
@@ -2296,7 +2449,9 @@
         );
         const featureImportances = model.top_importances || [];
         const featureImportanceMax = Math.max(
-          ...featureImportances.map((item) => Math.abs(Number(item.score) || 0)),
+          ...featureImportances.map((item) =>
+            Math.abs(Number(item.score) || 0),
+          ),
           1,
         );
 
@@ -2761,7 +2916,10 @@
                           </tbody>
                         </table>
                       </div>
-                      <div className="student-actions" style={{ marginTop: 14 }}>
+                      <div
+                        className="student-actions"
+                        style={{ marginTop: 14 }}
+                      >
                         <button
                           className="flat-button"
                           type="button"
@@ -2819,7 +2977,10 @@
 
           return (
             <div className="analytics-grid">
-              <section className="section-card" style={{ gridColumn: "1 / -1" }}>
+              <section
+                className="section-card"
+                style={{ gridColumn: "1 / -1" }}
+              >
                 <div className="section-title">
                   <h2>Filter analytics</h2>
                   <span>
@@ -2844,11 +3005,13 @@
                       }
                     >
                       <option value="">All departments</option>
-                      {(analyticsOptions.departments || []).map((department) => (
-                        <option key={department} value={department}>
-                          {department}
-                        </option>
-                      ))}
+                      {(analyticsOptions.departments || []).map(
+                        (department) => (
+                          <option key={department} value={department}>
+                            {department}
+                          </option>
+                        ),
+                      )}
                     </select>
                   </label>
                   <label className="auth-field">
@@ -3397,6 +3560,343 @@
           );
         };
 
+        const Resume = () => {
+          if (!isStudent) {
+            return (
+              <div className="section-empty">
+                Resume builder is available for student accounts only.
+              </div>
+            );
+          }
+
+          const setField = (key, value) =>
+            setResumeForm((current) => ({ ...current, [key]: value }));
+
+          return (
+            <div className="section-stack">
+              <section className="section-card">
+                <div className="section-title">
+                  <h2>Resume builder</h2>
+                  <span>Create and download your PDF resume</span>
+                </div>
+                {loadingResume ? (
+                  <div className="section-empty">Loading resume...</div>
+                ) : (
+                  <div key={resumeFormVersion}>
+                    <div className="section-stack">
+                      <div className="section-title">
+                        <h2>Header and Contact</h2>
+                        <span>Keep this aligned across the top</span>
+                      </div>
+                      <div className="form-grid">
+                        <ResumeInput
+                          label="Full name"
+                          value={resumeForm.full_name}
+                          onChange={(value) => setField("full_name", value)}
+                          placeholder="Your full name"
+                          onKeyDownHandler={_stopKeyPropagation}
+                        />
+                        <ResumeInput
+                          label="Headline"
+                          value={resumeForm.headline}
+                          onChange={(value) => setField("headline", value)}
+                          placeholder="Full Stack Developer"
+                          onKeyDownHandler={_stopKeyPropagation}
+                        />
+                        <ResumeInput
+                          label="Location"
+                          value={resumeForm.location}
+                          onChange={(value) => setField("location", value)}
+                          placeholder="Greater Noida, Uttar Pradesh"
+                          onKeyDownHandler={_stopKeyPropagation}
+                        />
+                        <ResumeInput
+                          label="Email"
+                          value={resumeForm.email}
+                          onChange={(value) => setField("email", value)}
+                          placeholder="you@example.com"
+                          onKeyDownHandler={_stopKeyPropagation}
+                        />
+                        <ResumeInput
+                          label="Phone"
+                          value={resumeForm.phone}
+                          onChange={(value) => setField("phone", value)}
+                          placeholder="+91 98XXXXXX12"
+                          onKeyDownHandler={_stopKeyPropagation}
+                        />
+                        <ResumeInput
+                          label="LinkedIn"
+                          value={resumeForm.linkedin}
+                          onChange={(value) => setField("linkedin", value)}
+                          placeholder="https://linkedin.com/in/..."
+                          onKeyDownHandler={_stopKeyPropagation}
+                        />
+                        <ResumeInput
+                          label="LeetCode"
+                          value={resumeForm.leetcode}
+                          onChange={(value) => setField("leetcode", value)}
+                          placeholder="https://leetcode.com/..."
+                          onKeyDownHandler={_stopKeyPropagation}
+                        />
+                        <ResumeInput
+                          label="GitHub"
+                          value={resumeForm.github}
+                          onChange={(value) => setField("github", value)}
+                          placeholder="https://github.com/..."
+                          onKeyDownHandler={_stopKeyPropagation}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="section-stack">
+                      <div className="section-title">
+                        <h2>Profile Summary</h2>
+                        <span>2 to 4 polished lines</span>
+                      </div>
+                      <ResumeInput
+                        label="Summary"
+                        value={resumeForm.summary}
+                        onChange={(value) => setField("summary", value)}
+                        placeholder="Full Stack Developer with hands-on experience in React, Node.js..."
+                        multiline
+                        rows={4}
+                        onKeyDownHandler={_stopKeyPropagation}
+                      />
+                    </div>
+
+                    <div className="section-stack">
+                      <div className="section-title">
+                        <h2>Education</h2>
+                        <span>Up to three entries</span>
+                      </div>
+                      <ResumeInput
+                        label="Education entry 1"
+                        value={resumeForm.education_1}
+                        onChange={(value) => setField("education_1", value)}
+                        placeholder="G.L. Bajaj Institute of Technology and Management | 2022 – Present | B.Tech in Information Technology (CGPA: 8.75) | Greater Noida, UP"
+                        multiline
+                        rows={3}
+                        onKeyDownHandler={_stopKeyPropagation}
+                      />
+                      <ResumeInput
+                        label="Education entry 2"
+                        value={resumeForm.education_2}
+                        onChange={(value) => setField("education_2", value)}
+                        placeholder="New Beersheba Sr. Sec. School | 2021 | Intermediate, CBSE (93.6%) | Pithoragarh, Uttarakhand"
+                        multiline
+                        rows={3}
+                        onKeyDownHandler={_stopKeyPropagation}
+                      />
+                      <ResumeInput
+                        label="Education entry 3"
+                        value={resumeForm.education_3}
+                        onChange={(value) => setField("education_3", value)}
+                        placeholder="New Beersheba Sr. Sec. School | 2019 | High School, CBSE (96%) | Pithoragarh, Uttarakhand"
+                        multiline
+                        rows={3}
+                        onKeyDownHandler={_stopKeyPropagation}
+                      />
+                    </div>
+
+                    <div className="section-stack">
+                      <div className="section-title">
+                        <h2>Technical Skills</h2>
+                        <span>Categorized like your sample</span>
+                      </div>
+                      <div className="form-grid">
+                        <ResumeInput
+                          label="Programming"
+                          value={resumeForm.skills_programming}
+                          onChange={(value) =>
+                            setField("skills_programming", value)
+                          }
+                          placeholder="C++, JavaScript"
+                          onKeyDownHandler={_stopKeyPropagation}
+                        />
+                        <ResumeInput
+                          label="Frontend"
+                          value={resumeForm.skills_frontend}
+                          onChange={(value) =>
+                            setField("skills_frontend", value)
+                          }
+                          placeholder="React.js, HTML, CSS"
+                          onKeyDownHandler={_stopKeyPropagation}
+                        />
+                        <ResumeInput
+                          label="Backend"
+                          value={resumeForm.skills_backend}
+                          onChange={(value) =>
+                            setField("skills_backend", value)
+                          }
+                          placeholder="Node.js, Express.js"
+                          onKeyDownHandler={_stopKeyPropagation}
+                        />
+                        <ResumeInput
+                          label="Databases"
+                          value={resumeForm.skills_databases}
+                          onChange={(value) =>
+                            setField("skills_databases", value)
+                          }
+                          placeholder="MongoDB, MySQL"
+                          onKeyDownHandler={_stopKeyPropagation}
+                        />
+                        <ResumeInput
+                          label="Tools"
+                          value={resumeForm.skills_tools}
+                          onChange={(value) => setField("skills_tools", value)}
+                          placeholder="Git, GitHub, Postman"
+                          onKeyDownHandler={_stopKeyPropagation}
+                        />
+                      </div>
+                    </div>
+
+                    <div className="section-stack">
+                      <div className="section-title">
+                        <h2>Experience</h2>
+                        <span>One focused role block</span>
+                      </div>
+                      <div className="form-grid">
+                        <ResumeInput
+                          label="Role / Company title"
+                          value={resumeForm.experience_1_title}
+                          onChange={(value) =>
+                            setField("experience_1_title", value)
+                          }
+                          placeholder="DotPe Pvt. Ltd. (Product-Based Company)"
+                          onKeyDownHandler={_stopKeyPropagation}
+                        />
+                        <ResumeInput
+                          label="Timeline and location"
+                          value={resumeForm.experience_1_meta}
+                          onChange={(value) =>
+                            setField("experience_1_meta", value)
+                          }
+                          placeholder="Jul 2025 – Sept 2025 | Gurugram, Haryana"
+                          onKeyDownHandler={_stopKeyPropagation}
+                        />
+                      </div>
+                      <ResumeInput
+                        label="Experience bullets"
+                        value={resumeForm.experience_1_points}
+                        onChange={(value) =>
+                          setField("experience_1_points", value)
+                        }
+                        placeholder="Worked as a Full Stack Developer using React.js, Node.js, and Golang..."
+                        multiline
+                        rows={5}
+                        onKeyDownHandler={_stopKeyPropagation}
+                      />
+                    </div>
+
+                    <div className="section-stack">
+                      <div className="section-title">
+                        <h2>Projects</h2>
+                        <span>Two project blocks with links</span>
+                      </div>
+                      <ResumeInput
+                        label="Project 1 title"
+                        value={resumeForm.project_1_title}
+                        onChange={(value) => setField("project_1_title", value)}
+                        placeholder="AI Finance Web Platform"
+                        onKeyDownHandler={_stopKeyPropagation}
+                      />
+                      <ResumeInput
+                        label="Project 1 link"
+                        value={resumeForm.project_1_link}
+                        onChange={(value) => setField("project_1_link", value)}
+                        placeholder="Live / GitHub link"
+                        onKeyDownHandler={_stopKeyPropagation}
+                      />
+                      <ResumeInput
+                        label="Project 1 bullets"
+                        value={resumeForm.project_1_points}
+                        onChange={(value) =>
+                          setField("project_1_points", value)
+                        }
+                        placeholder="Built a finance management platform..."
+                        multiline
+                        rows={4}
+                        onKeyDownHandler={_stopKeyPropagation}
+                      />
+                      <ResumeInput
+                        label="Project 2 title"
+                        value={resumeForm.project_2_title}
+                        onChange={(value) => setField("project_2_title", value)}
+                        placeholder="Algorithm Visualizer"
+                        onKeyDownHandler={_stopKeyPropagation}
+                      />
+                      <ResumeInput
+                        label="Project 2 link"
+                        value={resumeForm.project_2_link}
+                        onChange={(value) => setField("project_2_link", value)}
+                        placeholder="Live / GitHub link"
+                        onKeyDownHandler={_stopKeyPropagation}
+                      />
+                      <ResumeInput
+                        label="Project 2 bullets"
+                        value={resumeForm.project_2_points}
+                        onChange={(value) =>
+                          setField("project_2_points", value)
+                        }
+                        placeholder="Developed a web-based tool to visualize sorting..."
+                        multiline
+                        rows={4}
+                        onKeyDownHandler={_stopKeyPropagation}
+                      />
+                    </div>
+
+                    <div className="section-stack">
+                      <div className="section-title">
+                        <h2>Additional Sections</h2>
+                        <span>Optional finishing touches</span>
+                      </div>
+                      <ResumeInput
+                        label="Certifications"
+                        value={resumeForm.certifications}
+                        onChange={(value) => setField("certifications", value)}
+                        placeholder="Course name, issuer, year"
+                        multiline
+                        rows={3}
+                        onKeyDownHandler={_stopKeyPropagation}
+                      />
+                      <ResumeInput
+                        label="Achievements"
+                        value={resumeForm.achievements}
+                        onChange={(value) => setField("achievements", value)}
+                        placeholder="Awards, rankings, leadership highlights"
+                        multiline
+                        rows={3}
+                        onKeyDownHandler={_stopKeyPropagation}
+                      />
+                    </div>
+
+                    <div className="download-actions">
+                      <button
+                        className="primary"
+                        type="button"
+                        onClick={saveResume}
+                        disabled={savingResume}
+                      >
+                        {savingResume ? "Saving..." : "Save resume"}
+                      </button>
+                      <button
+                        className="flat-button"
+                        type="button"
+                        onClick={downloadResumePdf}
+                        disabled={busyDownload === "my_resume.pdf"}
+                      >
+                        {busyDownload === "my_resume.pdf"
+                          ? "Downloading..."
+                          : "Download PDF"}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </section>
+            </div>
+          );
+        };
+
         const Downloads = () => {
           const adminStudentId =
             selectedStudentId || students[0]?.student_id || "";
@@ -3758,7 +4258,15 @@
                     >
                       Analytics
                     </button>
-                  ) : null}
+                  ) : (
+                    <button
+                      className="flat-button"
+                      type="button"
+                      onClick={() => go("resume")}
+                    >
+                      Resume
+                    </button>
+                  )}
                   <button
                     className="flat-button"
                     type="button"
@@ -3787,6 +4295,7 @@
               {page === "analytics" && isAdmin ? <Analytics /> : null}
               {page === "students" && isAdmin ? <Students /> : null}
               {page === "profile" ? <Profile /> : null}
+              {page === "resume" ? <Resume /> : null}
               {page === "downloads" ? <Downloads /> : null}
             </main>
           </div>
