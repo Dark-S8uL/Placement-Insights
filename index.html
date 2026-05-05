@@ -1837,6 +1837,10 @@
         });
         const [analyticsData, setAnalyticsData] = useState(null);
         const [loadingAnalytics, setLoadingAnalytics] = useState(false);
+        const [improvementScope, setImprovementScope] = useState("overall");
+        const [improvementDepartment, setImprovementDepartment] = useState("");
+        const [academicScope, setAcademicScope] = useState("overall");
+        const [academicDepartment, setAcademicDepartment] = useState("");
 
         const [loadingSession, setLoadingSession] = useState(Boolean(token));
         const [loginError, setLoginError] = useState("");
@@ -2246,6 +2250,10 @@
             setRankingDepartment("");
             setRankingData(null);
             setRankingPage(1);
+            setImprovementScope("overall");
+            setImprovementDepartment("");
+            setAcademicScope("overall");
+            setAcademicDepartment("");
             setAnalyticsData(null);
             setAnalyticsOptions({
               departments: [],
@@ -3392,6 +3400,16 @@
         const Downloads = () => {
           const adminStudentId =
             selectedStudentId || students[0]?.student_id || "";
+          const reportDepartments = analyticsOptions.departments?.length
+            ? analyticsOptions.departments
+            : rankingDepartments;
+          const reportEndpoint = (slug, scope, department) => {
+            const params = new URLSearchParams({ scope });
+            if (scope === "department" && department) {
+              params.set("department", department);
+            }
+            return `/api/download/${slug}.csv?${params.toString()}`;
+          };
           return (
             <div className="downloads-grid">
               <section className="section-card">
@@ -3490,6 +3508,139 @@
                 )}
               </section>
 
+              {isAdmin ? (
+                <section className="section-card">
+                  <div className="section-title">
+                    <h2>Improvement report</h2>
+                    <span>Improvement areas by scope</span>
+                  </div>
+                  <div className="download-selector">
+                    <label className="auth-field">
+                      Scope
+                      <select
+                        value={improvementScope}
+                        onChange={(event) => {
+                          const nextScope = event.target.value;
+                          setImprovementScope(nextScope);
+                          if (nextScope === "overall") {
+                            setImprovementDepartment("");
+                          }
+                        }}
+                      >
+                        <option value="overall">Overall</option>
+                        <option value="department">Department wise</option>
+                      </select>
+                    </label>
+                    {improvementScope === "department" ? (
+                      <label className="auth-field">
+                        Department
+                        <select
+                          value={improvementDepartment}
+                          onChange={(event) =>
+                            setImprovementDepartment(event.target.value)
+                          }
+                        >
+                          <option value="">Select department</option>
+                          {reportDepartments.map((department) => (
+                            <option key={department} value={department}>
+                              {department}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
+                    <button
+                      className="primary"
+                      type="button"
+                      onClick={() =>
+                        downloadCsv(
+                          reportEndpoint(
+                            "improvement-report",
+                            improvementScope,
+                            improvementDepartment,
+                          ),
+                          improvementScope === "department"
+                            ? `improvement_report_department_${improvementDepartment || "selected"}.csv`
+                            : "improvement_report_overall.csv",
+                        )
+                      }
+                      disabled={
+                        improvementScope === "department" &&
+                        !improvementDepartment
+                      }
+                    >
+                      Download Improvement CSV
+                    </button>
+                  </div>
+                </section>
+              ) : null}
+
+              {isAdmin ? (
+                <section className="section-card">
+                  <div className="section-title">
+                    <h2>Academic report</h2>
+                    <span>Academic statistics by scope</span>
+                  </div>
+                  <div className="download-selector">
+                    <label className="auth-field">
+                      Scope
+                      <select
+                        value={academicScope}
+                        onChange={(event) => {
+                          const nextScope = event.target.value;
+                          setAcademicScope(nextScope);
+                          if (nextScope === "overall") {
+                            setAcademicDepartment("");
+                          }
+                        }}
+                      >
+                        <option value="overall">Overall</option>
+                        <option value="department">Department wise</option>
+                      </select>
+                    </label>
+                    {academicScope === "department" ? (
+                      <label className="auth-field">
+                        Department
+                        <select
+                          value={academicDepartment}
+                          onChange={(event) =>
+                            setAcademicDepartment(event.target.value)
+                          }
+                        >
+                          <option value="">Select department</option>
+                          {reportDepartments.map((department) => (
+                            <option key={department} value={department}>
+                              {department}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    ) : null}
+                    <button
+                      className="primary"
+                      type="button"
+                      onClick={() =>
+                        downloadCsv(
+                          reportEndpoint(
+                            "academic-report",
+                            academicScope,
+                            academicDepartment,
+                          ),
+                          academicScope === "department"
+                            ? `academic_report_department_${academicDepartment || "selected"}.csv`
+                            : "academic_report_overall.csv",
+                        )
+                      }
+                      disabled={
+                        academicScope === "department" && !academicDepartment
+                      }
+                    >
+                      Download Academic CSV
+                    </button>
+                  </div>
+                </section>
+              ) : null}
+
               <section className="section-card">
                 <div className="section-title">
                   <h2>Export summary</h2>
@@ -3518,6 +3669,14 @@
                       </tr>
                       <tr>
                         <td>Predictions CSV</td>
+                        <td>{isAdmin ? "Allowed" : "Admin only"}</td>
+                      </tr>
+                      <tr>
+                        <td>Improvement report CSV</td>
+                        <td>{isAdmin ? "Allowed" : "Admin only"}</td>
+                      </tr>
+                      <tr>
+                        <td>Academic report CSV</td>
                         <td>{isAdmin ? "Allowed" : "Admin only"}</td>
                       </tr>
                     </tbody>

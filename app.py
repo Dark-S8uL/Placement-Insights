@@ -1019,6 +1019,175 @@ def student_rankings_csv(department):
     return output.getvalue()
 
 
+def report_rows_for_scope(scope: str, department: Optional[str] = None):
+    normalized_scope = (scope or "overall").strip().lower()
+    selected_department = (department or "").strip()
+    if normalized_scope not in {"overall", "department"}:
+        raise HTTPException(status_code=400, detail="scope must be either 'overall' or 'department'")
+    if normalized_scope == "department" and not selected_department:
+        raise HTTPException(status_code=400, detail="department is required when scope is 'department'")
+
+    rows = ROWS if normalized_scope == "overall" else [
+        row for row in ROWS if student_department(row).lower() == selected_department.lower()
+    ]
+    if not rows:
+        raise HTTPException(status_code=404, detail="No data found for the selected report filter.")
+    return rows, normalized_scope, selected_department
+
+
+def improvement_report_csv(scope: str = "overall", department: Optional[str] = None):
+    rows, normalized_scope, selected_department = report_rows_for_scope(scope, department)
+    output = StringIO()
+    fieldnames = [
+        "scope",
+        "department",
+        "feature",
+        "overall_avg",
+        "placed_avg",
+        "not_placed_avg",
+        "gap",
+        "priority",
+        "guidance",
+    ]
+    writer = DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+
+    features = [
+        ("CGPA", "higher"),
+        ("Internships", "higher"),
+        ("Projects", "higher"),
+        ("Certifications", "higher"),
+        ("Communication_Skills", "higher"),
+        ("Aptitude_Score", "higher"),
+        ("Backlogs", "lower"),
+    ]
+
+    for feature, direction in features:
+        placed_values = []
+        not_placed_values = []
+        all_values = []
+        for row in rows:
+            value = to_float(row.get(feature))
+            if value is None:
+                continue
+            all_values.append(value)
+            if is_placed(row.get("Placement", row.get("PlacementStatus", ""))):
+                placed_values.append(value)
+            else:
+                not_placed_values.append(value)
+
+        if not all_values:
+            continue
+
+        overall_avg = average(all_values)
+        placed_avg = average(placed_values)
+        not_placed_avg = average(not_placed_values)
+        gap = round(placed_avg - not_placed_avg, 2)
+
+        if direction == "higher":
+            priority = "High" if gap >= 0.5 else "Medium" if gap >= 0.1 else "Low"
+            guidance = f"Raise {feature.replace('_', ' ')} toward placed average ({placed_avg})."
+        else:
+            priority = "High" if gap <= -0.5 else "Medium" if gap < 0 else "Low"
+            guidance = f"Keep {feature.replace('_', ' ')} at or below placed average ({placed_avg})."
+
+        writer.writerow(
+            {
+                "scope": normalized_scope,
+                "department": selected_department if normalized_scope == "department" else "All",
+                "feature": feature,
+                "overall_avg": overall_avg,
+                "placed_avg": placed_avg,
+                "not_placed_avg": not_placed_avg,
+                "gap": gap,
+                "priority": priority,
+                "guidance": guidance,
+            }
+        )
+    return output.getvalue()
+
+
+def academic_report_csv(scope: str = "overall", department: Optional[str] = None):
+    rows, normalized_scope, selected_department = report_rows_for_scope(scope, department)
+    output = StringIO()
+    fieldnames = [
+        "scope",
+        "department",
+        "total_students",
+        "placed_students",
+        "not_placed_students",
+        "placement_rate",
+        "avg_cgpa",
+        "avg_aptitude",
+        "avg_communication",
+        "avg_projects",
+        "avg_internships",
+        "avg_backlogs",
+    ]
+    writer = DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+
+    grouped_rows = defaultdict(list)
+    if normalized_scope == "overall":
+        for row in rows:
+            grouped_rows[student_department(row)].append(row)
+    else:
+        grouped_rows[selected_department] = rows
+
+    for group_name, group_rows in sorted(grouped_rows.items(), key=lambda item: item[0].lower()):
+        placed_count = 0
+        cgpa_values = []
+        aptitude_values = []
+        communication_values = []
+        projects_values = []
+        internships_values = []
+        backlogs_values = []
+
+        for row in group_rows:
+            if is_placed(row.get("Placement", row.get("PlacementStatus", ""))):
+                placed_count += 1
+            value = to_float(row.get("CGPA"))
+            if value is not None:
+                cgpa_values.append(value)
+            value = to_float(row.get("Aptitude_Score"))
+            if value is not None:
+                aptitude_values.append(value)
+            value = to_float(row.get("Communication_Skills"))
+            if value is not None:
+                communication_values.append(value)
+            value = to_float(row.get("Projects"))
+            if value is not None:
+                projects_values.append(value)
+            value = to_float(row.get("Internships"))
+            if value is not None:
+                internships_values.append(value)
+            value = to_float(row.get("Backlogs"))
+            if value is not None:
+                backlogs_values.append(value)
+
+        total_students = len(group_rows)
+        not_placed = total_students - placed_count
+        placement_rate = round((placed_count / total_students) * 100, 2) if total_students else 0.0
+
+        writer.writerow(
+            {
+                "scope": normalized_scope,
+                "department": group_name if normalized_scope == "overall" else selected_department,
+                "total_students": total_students,
+                "placed_students": placed_count,
+                "not_placed_students": not_placed,
+                "placement_rate": placement_rate,
+                "avg_cgpa": average(cgpa_values),
+                "avg_aptitude": average(aptitude_values),
+                "avg_communication": average(communication_values),
+                "avg_projects": average(projects_values),
+                "avg_internships": average(internships_values),
+                "avg_backlogs": average(backlogs_values),
+            }
+        )
+    return output.getvalue()
+
+
 def overall_stats_csv():
     buffer = StringIO()
     writer = DictWriter(buffer, fieldnames=["section", "label", "metric", "value"])
@@ -1724,6 +1893,34 @@ def download_student_rankings_csv(department: str, current_user: Dict[str, Any] 
         raise HTTPException(status_code=400, detail="Department is required")
     safe_department = "".join(character if character.isalnum() else "_" for character in department).strip("_") or "department"
     return csv_response(f"student_rankings_{safe_department}.csv", student_rankings_csv(department))
+
+
+@app.get("/api/download/improvement-report.csv")
+def download_improvement_report_csv(
+    scope: str = "overall",
+    department: Optional[str] = None,
+    current_user: Dict[str, Any] = Depends(require_admin),
+):
+    safe_scope = "".join(character if character.isalnum() else "_" for character in scope).strip("_") or "overall"
+    safe_department = "".join(character if character.isalnum() else "_" for character in (department or "")).strip("_")
+    filename = f"improvement_report_{safe_scope}"
+    if safe_department:
+        filename = f"{filename}_{safe_department}"
+    return csv_response(f"{filename}.csv", improvement_report_csv(scope=scope, department=department))
+
+
+@app.get("/api/download/academic-report.csv")
+def download_academic_report_csv(
+    scope: str = "overall",
+    department: Optional[str] = None,
+    current_user: Dict[str, Any] = Depends(require_admin),
+):
+    safe_scope = "".join(character if character.isalnum() else "_" for character in scope).strip("_") or "overall"
+    safe_department = "".join(character if character.isalnum() else "_" for character in (department or "")).strip("_")
+    filename = f"academic_report_{safe_scope}"
+    if safe_department:
+        filename = f"{filename}_{safe_department}"
+    return csv_response(f"{filename}.csv", academic_report_csv(scope=scope, department=department))
 
 
 @app.post("/api/predict")
