@@ -11,16 +11,23 @@ from urllib import error as urllib_error
 from urllib import parse as urllib_parse
 from urllib import request as urllib_request
 from uuid import uuid4
+import logging
 
 import joblib
 import numpy as np
-from fastapi import Depends, FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Header, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 import pandas as pd
 import os
 import sqlite3
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 # database / auth
 from passlib.context import CryptContext
@@ -1430,17 +1437,230 @@ def _extract_first_json_object(raw_text: str) -> Optional[Dict[str, Any]]:
         return None
 
 
-def polish_resume_with_gemini(resume_payload: Dict[str, Any]) -> Dict[str, Any]:
+def _gemini_generate_json(prompt: Dict[str, Any], timeout: int, temperature: float) -> Dict[str, Any]:
     api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if not api_key:
-        return resume_payload
+        raise ValueError("GEMINI_API_KEY is not configured")
 
-    model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
-    endpoint = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
-        f"?key={urllib_parse.quote(api_key)}"
+    configured_model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    model_candidates = [configured_model, "gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-flash-latest"]
+    seen_models = set()
+    last_error = None
+
+    body = {
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": json.dumps(prompt, ensure_ascii=False),
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {
+            "temperature": temperature,
+            "responseMimeType": "application/json",
+        },
+    }
+
+    for model_name in model_candidates:
+        if model_name in seen_models:
+            continue
+        seen_models.add(model_name)
+
+        endpoint = (
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent"
+            f"?key={urllib_parse.quote(api_key)}"
+        )
+        logger.info("Gemini request starting model=%s", model_name)
+        try:
+            request = urllib_request.Request(
+                endpoint,
+                data=json.dumps(body).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with urllib_request.urlopen(request, timeout=timeout) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+            text = (
+                payload.get("candidates", [{}])[0]
+                .get("content", {})
+                .get("parts", [{}])[0]
+                .get("text", "")
+            )
+            parsed = _extract_first_json_object(text)
+            if not parsed:
+                raise ValueError(f"Gemini response could not be parsed for model={model_name}")
+            logger.info("Gemini request succeeded model=%s", model_name)
+            return parsed
+        except urllib_error.HTTPError as exc:
+            body_text = ""
+            try:
+                body_text = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                body_text = "<unavailable>"
+            logger.warning(
+                "Gemini HTTP error model=%s status=%s reason=%s body=%s",
+                model_name,
+                getattr(exc, "code", None),
+                getattr(exc, "reason", None),
+                body_text,
+            )
+            last_error = f"{exc.code} {exc.reason}: {body_text or str(exc)}"
+            if exc.code == 404:
+                continue
+            break
+        except Exception:
+            logger.exception("Gemini request failed model=%s", model_name)
+            last_error = f"Gemini request failed for model={model_name}"
+            break
+
+    raise ValueError(last_error or "Gemini request failed")
+
+
+def _resume_suggestion_fallback(resume_payload: Dict[str, Any], view_mode: str) -> Dict[str, Any]:
+    suggestions: List[str] = []
+
+    full_name = (resume_payload.get("full_name") or "").strip()
+    headline = (resume_payload.get("headline") or "").strip()
+    summary = (resume_payload.get("summary") or "").strip()
+    location = (resume_payload.get("location") or "").strip()
+    email = (resume_payload.get("email") or "").strip()
+    phone = (resume_payload.get("phone") or "").strip()
+    linkedin = (resume_payload.get("linkedin") or "").strip()
+    github = (resume_payload.get("github") or "").strip()
+
+    education_text = " ".join(
+        str(resume_payload.get(field, "")).strip()
+        for field in ["education_1", "education_2", "education_3"]
+    ).lower()
+    skills_text = " ".join(
+        str(resume_payload.get(field, "")).strip()
+        for field in [
+            "skills_programming",
+            "skills_frontend",
+            "skills_backend",
+            "skills_databases",
+            "skills_tools",
+        ]
+    ).lower()
+    project_text = " ".join(
+        str(resume_payload.get(field, "")).strip()
+        for field in [
+            "project_1_title",
+            "project_1_points",
+            "project_2_title",
+            "project_2_points",
+        ]
+    ).lower()
+    experience_text = " ".join(
+        str(resume_payload.get(field, "")).strip()
+        for field in ["experience_1_title", "experience_1_meta", "experience_1_points"]
+    ).lower()
+
+    if not full_name:
+        suggestions.append("Add your full name prominently at the top so recruiters can identify you immediately.")
+    if not headline:
+        suggestions.append("Add a short headline that states your target role, such as Software Developer or Data Analyst.")
+    if not summary:
+        suggestions.append("Write a 2-4 line profile summary that highlights your strengths and target role.")
+    if not location:
+        suggestions.append("Add your city and state so the resume has complete contact context.")
+    if not email or not phone:
+        suggestions.append("Include both email and phone number in the header for faster recruiter follow-up.")
+    if not linkedin:
+        suggestions.append("Add a LinkedIn profile link to strengthen your professional presence.")
+    if not github:
+        suggestions.append("Add a GitHub profile if you have projects or code samples to show.")
+    if len(education_text.replace(" ", "")) < 30:
+        suggestions.append("Expand the education section with institute names, degrees, and dates for each entry.")
+    if len(skills_text.replace(" ", "")) < 40:
+        suggestions.append("Add more technical keywords across programming, frontend, backend, databases, and tools.")
+    if len(project_text.replace(" ", "")) < 40:
+        suggestions.append("Add more project detail and measurable outcomes to prove your hands-on experience.")
+    if len(experience_text.replace(" ", "")) < 30:
+        suggestions.append("Describe your experience or internships with action verbs and measurable impact.")
+    if not resume_payload.get("certifications", "").strip():
+        suggestions.append("Add certifications if you have them, because they improve credibility and ATS coverage.")
+    if not resume_payload.get("achievements", "").strip():
+        suggestions.append("Add achievements, awards, or results that make your profile stand out.")
+
+    fallback_bullets = suggestions[:5] or [
+        "Strengthen the headline so it clearly matches your target role.",
+        "Add measurable impact to your projects and experience.",
+        "Expand technical skills with keywords recruiters and ATS tools will recognize.",
+        "Complete the contact section with LinkedIn and GitHub links.",
+        "Add certifications or achievements to make the profile more competitive.",
+    ]
+
+    detailed_summary = (
+        "Your resume would improve most by making the role target clearer, adding stronger quantified project and experience bullets, "
+        "and filling in any missing contact or credibility details such as LinkedIn, GitHub, certifications, and achievements. "
+        "You should also make sure the education and skills sections are rich in recruiter-friendly keywords so the resume performs better in ATS screening."
     )
 
+    if view_mode == "top5":
+        return {"view": "top5", "suggestions": fallback_bullets, "source": "fallback"}
+    return {"view": "detailed", "summary": detailed_summary, "source": "fallback"}
+
+
+def _openai_generate_json(prompt: Dict[str, Any], timeout: int) -> Dict[str, Any]:
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY is not configured")
+
+    model_name = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    endpoint = "https://api.openai.com/v1/chat/completions"
+    body = {
+        "model": model_name,
+        "messages": [
+            {"role": "system", "content": "Return only valid JSON. No markdown or extra text."},
+            {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
+        ],
+        "temperature": 0.3,
+        "response_format": {"type": "json_object"},
+    }
+
+    logger.info("OpenAI request starting model=%s", model_name)
+    request = urllib_request.Request(
+        endpoint,
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+        text = (
+            payload.get("choices", [{}])[0]
+            .get("message", {})
+            .get("content", "")
+        )
+        parsed = _extract_first_json_object(text)
+        if not parsed:
+            raise ValueError("OpenAI response could not be parsed")
+        logger.info("OpenAI request succeeded model=%s", model_name)
+        return parsed
+    except urllib_error.HTTPError as exc:
+        body_text = ""
+        try:
+            body_text = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            body_text = "<unavailable>"
+        logger.warning(
+            "OpenAI HTTP error model=%s status=%s reason=%s body=%s",
+            model_name,
+            getattr(exc, "code", None),
+            getattr(exc, "reason", None),
+            body_text,
+        )
+        raise ValueError(f"{exc.code} {exc.reason}: {body_text or str(exc)}")
+
+
+def polish_resume_with_gemini(resume_payload: Dict[str, Any]) -> Dict[str, Any]:
     prompt = {
         "instruction": (
             "Rewrite this student resume content into concise, professional, ATS-friendly text. "
@@ -1460,40 +1680,8 @@ def polish_resume_with_gemini(resume_payload: Dict[str, Any]) -> Dict[str, Any]:
         "resume": resume_payload,
     }
 
-    body = {
-        "contents": [
-            {
-                "parts": [
-                    {
-                        "text": json.dumps(prompt, ensure_ascii=False),
-                    }
-                ]
-            }
-        ],
-        "generationConfig": {
-            "temperature": 0.2,
-            "responseMimeType": "application/json",
-        },
-    }
-
     try:
-        request = urllib_request.Request(
-            endpoint,
-            data=json.dumps(body).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        with urllib_request.urlopen(request, timeout=20) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        text = (
-            payload.get("candidates", [{}])[0]
-            .get("content", {})
-            .get("parts", [{}])[0]
-            .get("text", "")
-        )
-        parsed = _extract_first_json_object(text)
-        if not parsed:
-            return resume_payload
+        parsed = _gemini_generate_json(prompt, timeout=20, temperature=0.2)
         polished = normalize_resume_payload(parsed, resume_payload.get("full_name"))
         polished["email"] = resume_payload.get("email", "")
         polished["phone"] = resume_payload.get("phone", "")
@@ -1501,7 +1689,8 @@ def polish_resume_with_gemini(resume_payload: Dict[str, Any]) -> Dict[str, Any]:
         polished["linkedin"] = resume_payload.get("linkedin", "")
         polished["github"] = resume_payload.get("github", "")
         return polished
-    except (urllib_error.URLError, urllib_error.HTTPError, TimeoutError, KeyError, ValueError, json.JSONDecodeError):
+    except Exception:
+        logger.exception("Gemini polishing failed; falling back to original resume")
         return resume_payload
 
 
@@ -2397,6 +2586,81 @@ def save_student_resume(payload: ResumeRequest, current_user: Dict[str, Any] = D
     )
     db_upsert_resume(student_id, normalized)
     return {"message": "Resume saved successfully.", "resume": normalized}
+
+
+@app.post("/api/student/resume/suggestions")
+def get_resume_suggestions(view_mode: str = Query("top5"), current_user: Dict[str, Any] = Depends(get_current_user)):
+    if current_user.get("role") != "student":
+        raise HTTPException(status_code=403, detail="Student access required")
+    student_id = normalize_student_id(current_user.get("student_id"))
+    if student_id is None:
+        raise HTTPException(status_code=400, detail="Student ID is missing")
+
+    resume_payload = db_get_resume(student_id)
+    if resume_payload is None:
+        raise HTTPException(status_code=404, detail="Resume not found. Save resume data first.")
+
+    normalized = normalize_resume_payload(
+        resume_payload,
+        current_user.get("display_name") or current_user.get("username"),
+    )
+
+    if view_mode == "top5":
+        prompt_instruction = (
+            "Analyze this resume and provide exactly 5 concise, actionable bullet-point suggestions "
+            "to make it stronger. Each bullet should be one line, starting with an action verb. "
+            "Focus on impact, clarity, and common ATS optimization. Format: one bullet per line, no numbering."
+        )
+    else:
+        prompt_instruction = (
+            "Analyze this resume comprehensively and provide a detailed summary (3-5 paragraphs) of key improvements "
+            "the student should make. Cover strengths to highlight, weaknesses to address, ATS optimization, "
+            "and strategic improvements. Be specific and actionable."
+        )
+
+    prompt = {
+        "instruction": prompt_instruction,
+        "resume": normalized,
+    }
+
+    try:
+        parsed = _gemini_generate_json(prompt, timeout=30, temperature=0.3)
+        if view_mode == "top5":
+            suggestions = parsed.get("suggestions", [])
+            if not isinstance(suggestions, list):
+                suggestions = [suggestions] if suggestions else []
+            return {"view": "top5", "suggestions": suggestions[:5]}
+        else:
+            summary = parsed.get("summary", "")
+            if not summary:
+                summary = parsed.get("improvements", "") or str(parsed)
+            return {"view": "detailed", "summary": summary}
+    except Exception as e:
+        logger.warning(
+            "Gemini suggestions failed for student_id=%s view_mode=%s; trying OpenAI fallback",
+            student_id,
+            view_mode,
+        )
+        try:
+            parsed = _openai_generate_json(prompt, timeout=30)
+            if view_mode == "top5":
+                suggestions = parsed.get("suggestions", [])
+                if not isinstance(suggestions, list):
+                    suggestions = [suggestions] if suggestions else []
+                return {"view": "top5", "suggestions": suggestions[:5], "source": "openai"}
+            summary = parsed.get("summary", "")
+            if not summary:
+                summary = parsed.get("improvements", "") or str(parsed)
+            return {"view": "detailed", "summary": summary, "source": "openai"}
+        except Exception as openai_error:
+            logger.exception(
+                "OpenAI fallback failed for student_id=%s view_mode=%s",
+                student_id,
+                view_mode,
+            )
+            fallback = _resume_suggestion_fallback(normalized, view_mode)
+            fallback["message"] = f"Gemini failed ({str(e)}); OpenAI failed ({str(openai_error)}); returned local suggestions instead."
+            return fallback
 
 
 @app.get("/api/download/resume.pdf")

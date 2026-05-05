@@ -1917,6 +1917,11 @@
         const [resumeFormVersion, setResumeFormVersion] = useState(0);
         const [loadingResume, setLoadingResume] = useState(false);
         const [savingResume, setSavingResume] = useState(false);
+        const [showSuggestionsModal, setShowSuggestionsModal] = useState(false);
+        const [suggestionViewMode, setSuggestionViewMode] = useState("top5");
+        const [suggestions, setSuggestions] = useState(null);
+        const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+        const [suggestionsError, setSuggestionsError] = useState("");
 
         const [loadingSession, setLoadingSession] = useState(Boolean(token));
         const [loginError, setLoginError] = useState("");
@@ -2301,6 +2306,31 @@
         const downloadResumePdf = async () => {
           // Single professional download flow handled server-side.
           await downloadCsv("/api/download/resume.pdf", "my_resume.pdf");
+        };
+
+        const getSuggestions = async (viewMode) => {
+          if (!token) {
+            setSuggestionsError("Not authenticated.");
+            return;
+          }
+          setLoadingSuggestions(true);
+          setSuggestionsError("");
+          try {
+            const params = new URLSearchParams({ view_mode: viewMode });
+            const payload = await requestJSON(
+              `/api/student/resume/suggestions?${params.toString()}`,
+              token,
+              { method: "POST" },
+            );
+            setSuggestions(payload);
+            setSuggestionViewMode(viewMode);
+          } catch (error) {
+            setSuggestionsError(
+              error.message || "Failed to generate suggestions.",
+            );
+          } finally {
+            setLoadingSuggestions(false);
+          }
         };
 
         const _stopKeyPropagation = (e) => {
@@ -3889,7 +3919,231 @@
                           ? "Downloading..."
                           : "Download PDF"}
                       </button>
+                      <button
+                        className="primary"
+                        type="button"
+                        onClick={() => setShowSuggestionsModal(true)}
+                        style={{ marginLeft: 8 }}
+                      >
+                        ✨ Get AI suggestions
+                      </button>
                     </div>
+
+                    {showSuggestionsModal && (
+                      <div
+                        style={{
+                          position: "fixed",
+                          inset: 0,
+                          background: "rgba(0,0,0,0.5)",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          zIndex: 9999,
+                        }}
+                        onClick={() => setShowSuggestionsModal(false)}
+                      >
+                        <div
+                          className="section-card"
+                          style={{
+                            maxWidth: "600px",
+                            maxHeight: "80vh",
+                            overflowY: "auto",
+                            padding: "24px",
+                          }}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <div className="section-title">
+                            <h2>✨ AI Resume Suggestions</h2>
+                            <span>Get personalized improvement ideas</span>
+                          </div>
+
+                          {!suggestions ? (
+                            <>
+                              <div style={{ marginBottom: "16px" }}>
+                                <p>
+                                  Choose how you'd like to receive suggestions:
+                                </p>
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    gap: "12px",
+                                    marginTop: "12px",
+                                  }}
+                                >
+                                  <label
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: "6px",
+                                      cursor: "pointer",
+                                    }}
+                                  >
+                                    <input
+                                      type="radio"
+                                      name="viewMode"
+                                      value="top5"
+                                      checked={suggestionViewMode === "top5"}
+                                      onChange={(e) =>
+                                        setSuggestionViewMode(e.target.value)
+                                      }
+                                    />
+                                    <span>Top 5 bullet points</span>
+                                  </label>
+                                  <label
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: "6px",
+                                      cursor: "pointer",
+                                    }}
+                                  >
+                                    <input
+                                      type="radio"
+                                      name="viewMode"
+                                      value="detailed"
+                                      checked={
+                                        suggestionViewMode === "detailed"
+                                      }
+                                      onChange={(e) =>
+                                        setSuggestionViewMode(e.target.value)
+                                      }
+                                    />
+                                    <span>Detailed summary</span>
+                                  </label>
+                                </div>
+                              </div>
+
+                              <div
+                                style={{
+                                  display: "flex",
+                                  gap: "8px",
+                                  justifyContent: "flex-end",
+                                }}
+                              >
+                                <button
+                                  className="flat-button"
+                                  onClick={() => setShowSuggestionsModal(false)}
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  className="primary"
+                                  onClick={() =>
+                                    getSuggestions(suggestionViewMode)
+                                  }
+                                  disabled={loadingSuggestions}
+                                >
+                                  {loadingSuggestions
+                                    ? "Generating..."
+                                    : "Generate suggestions"}
+                                </button>
+                              </div>
+
+                              {suggestionsError && (
+                                <div
+                                  style={{
+                                    color: "red",
+                                    marginTop: "12px",
+                                    fontSize: "0.9rem",
+                                  }}
+                                >
+                                  {suggestionsError}
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <>
+                              <div style={{ marginBottom: "16px" }}>
+                                <div
+                                  style={{
+                                    display: "flex",
+                                    gap: "8px",
+                                    marginBottom: "12px",
+                                  }}
+                                >
+                                  <button
+                                    className={`flat-button ${suggestionViewMode === "top5" ? "primary" : ""}`}
+                                    onClick={() =>
+                                      setSuggestionViewMode("top5")
+                                    }
+                                  >
+                                    Top 5
+                                  </button>
+                                  <button
+                                    className={`flat-button ${suggestionViewMode === "detailed" ? "primary" : ""}`}
+                                    onClick={() =>
+                                      setSuggestionViewMode("detailed")
+                                    }
+                                  >
+                                    Detailed
+                                  </button>
+                                  <button
+                                    className="flat-button"
+                                    onClick={() => {
+                                      setSuggestions(null);
+                                      setSuggestionsError("");
+                                    }}
+                                    style={{ marginLeft: "auto" }}
+                                  >
+                                    Get new suggestions
+                                  </button>
+                                </div>
+                              </div>
+
+                              {suggestionViewMode === "top5" &&
+                              suggestions.suggestions ? (
+                                <div>
+                                  <h3>Top 5 Improvement points:</h3>
+                                  <ul
+                                    style={{
+                                      lineHeight: "1.8",
+                                      marginLeft: "20px",
+                                      color: "#374151",
+                                    }}
+                                  >
+                                    {suggestions.suggestions.map(
+                                      (point, idx) => (
+                                        <li key={idx}>{point}</li>
+                                      ),
+                                    )}
+                                  </ul>
+                                </div>
+                              ) : suggestionViewMode === "detailed" &&
+                                suggestions.summary ? (
+                                <div>
+                                  <h3>Detailed improvement summary:</h3>
+                                  <p
+                                    style={{
+                                      lineHeight: "1.8",
+                                      color: "#374151",
+                                      whiteSpace: "pre-wrap",
+                                    }}
+                                  >
+                                    {suggestions.summary}
+                                  </p>
+                                </div>
+                              ) : null}
+
+                              <div
+                                style={{
+                                  display: "flex",
+                                  gap: "8px",
+                                  justifyContent: "flex-end",
+                                  marginTop: "16px",
+                                }}
+                              >
+                                <button
+                                  className="flat-button"
+                                  onClick={() => setShowSuggestionsModal(false)}
+                                >
+                                  Close
+                                </button>
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </section>
