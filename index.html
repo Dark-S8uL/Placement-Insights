@@ -965,6 +965,8 @@
       function profileDraft(profile) {
         const source = profile?.profile || {};
         return {
+          branch: profile?.branch || "CS",
+          college_tier: profile?.college_tier || "Tier 2",
           CGPA: source.CGPA ?? "",
           Internships: source.Internships ?? "",
           Projects: source.Projects ?? "",
@@ -1420,6 +1422,9 @@
       }
 
       function StudentSelfUpdateForm({ token, profile, onSaved }) {
+        const isNewProfile = Boolean(
+          profile?.profile_missing || profile?.profile?.CGPA == null,
+        );
         const [form, setForm] = React.useState(() => profileDraft(profile));
         const [loading, setLoading] = React.useState(false);
         const [error, setError] = React.useState("");
@@ -1444,6 +1449,8 @@
           setLoading(true);
           try {
             const body = {
+              branch: form.branch,
+              college_tier: form.college_tier,
               CGPA: parseFloat(form.CGPA),
               Internships: parseFloat(form.Internships),
               Projects: parseFloat(form.Projects),
@@ -1489,15 +1496,56 @@
         return (
           <section className="section-card" style={{ marginTop: 18 }}>
             <div className="section-title">
-              <h2>Update my profile</h2>
+              <h2>
+                {isNewProfile ? "Create my profile" : "Update my profile"}
+              </h2>
               <span>Self-service re-prediction</span>
             </div>
             <p>
-              Update the values you own. The saved profile is written back to
-              the dataset and the model runs again immediately.
+              Create your profile if this is your first login, or update the
+              values you own. The saved profile is written back to the dataset
+              and the model runs again immediately.
             </p>
             <form onSubmit={handleSubmit} style={{ paddingTop: 4 }}>
               <div style={gridStyle}>
+                <label className="auth-field">
+                  Branch
+                  <select
+                    value={form.branch}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        branch: event.target.value,
+                      }))
+                    }
+                    style={inputStyle}
+                  >
+                    {BRANCHES.map((branch) => (
+                      <option key={branch} value={branch}>
+                        {branch}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="auth-field">
+                  College Tier
+                  <select
+                    value={form.college_tier}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        college_tier: event.target.value,
+                      }))
+                    }
+                    style={inputStyle}
+                  >
+                    {COLLEGE_TIERS.map((tier) => (
+                      <option key={tier} value={tier}>
+                        {tier}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 <label className="auth-field">
                   CGPA
                   <input
@@ -1582,7 +1630,9 @@
               >
                 {loading
                   ? "Saving & predicting..."
-                  : "Save changes and re-predict"}
+                  : isNewProfile
+                    ? "Create profile and predict"
+                    : "Save changes and re-predict"}
               </button>
               {error && (
                 <div
@@ -1628,6 +1678,7 @@
           username: "",
           password: "",
           role: "student",
+          student_id: "",
           admin_pin: "",
         });
 
@@ -1648,6 +1699,17 @@
           setLoadingSession(true);
           try {
             const data = await requestJSON("/api/bootstrap", sessionToken);
+            if (!data.user) {
+              localStorage.removeItem(STORAGE_KEY);
+              setToken("");
+              setUser(null);
+              setBootstrap(null);
+              setStudents([]);
+              setSelectedStudentId(null);
+              setStudentQueryId("");
+              go("login");
+              return;
+            }
             setBootstrap(data);
             setUser(data.user);
             setStudents(data.students || []);
@@ -1849,7 +1911,10 @@
                 ? { username: loginForm.username, password: loginForm.password }
                 : {
                     ...loginForm,
-                    student_id: loginForm.role === "student" ? 100 : null,
+                    student_id:
+                      loginForm.role === "student"
+                        ? Number(loginForm.student_id)
+                        : null,
                   };
             const payload = await requestJSON(endpoint, null, {
               method: "POST",
@@ -1924,6 +1989,12 @@
                     <h2>{authMode === "login" ? "Sign in" : "Register"}</h2>
                     <span>Local role-based access</span>
                   </div>
+                  <div className="section-empty" style={{ marginBottom: 14 }}>
+                    New students should register with their unique student ID.
+                    After login, if your profile has not been created yet, you
+                    will see the option to create it and get an instant
+                    prediction.
+                  </div>
                   <form className="auth-form" onSubmit={login}>
                     <label className="auth-field">
                       Username
@@ -1981,6 +2052,14 @@
                             setLoginForm((current) => ({
                               ...current,
                               role: e.target.value,
+                              student_id:
+                                e.target.value === "student"
+                                  ? current.student_id
+                                  : "",
+                              admin_pin:
+                                e.target.value === "admin"
+                                  ? current.admin_pin
+                                  : "",
                             }))
                           }
                         >
@@ -1989,6 +2068,25 @@
                         </select>
                       </label>
                     )}
+                    {authMode === "register" &&
+                      loginForm.role === "student" && (
+                        <label className="auth-field">
+                          Student ID
+                          <input
+                            type="number"
+                            min="1"
+                            value={loginForm.student_id}
+                            onChange={(event) =>
+                              setLoginForm((current) => ({
+                                ...current,
+                                student_id: event.target.value,
+                              }))
+                            }
+                            placeholder="Enter your dataset student ID"
+                            required
+                          />
+                        </label>
+                      )}
                     {authMode === "register" && loginForm.role === "admin" && (
                       <label className="auth-field">
                         Admin PIN
@@ -2162,12 +2260,6 @@
                         <div className="mini-label">Placement</div>
                         <div className="mini-value">
                           {resolvedProfile.placement}
-                        </div>
-                      </div>
-                      <div className="mini">
-                        <div className="mini-label">Probability</div>
-                        <div className="mini-value">
-                          {formatValue(resolvedProfile.probability, "N/A")}%
                         </div>
                       </div>
                       <div className="mini">
@@ -2438,12 +2530,6 @@
                   <div className="overview-card">
                     <div className="overview-label">Placement</div>
                     <div className="overview-value">{profile.placement}</div>
-                  </div>
-                  <div className="overview-card">
-                    <div className="overview-label">Probability</div>
-                    <div className="overview-value">
-                      {formatValue(profile.probability, "N/A")}%
-                    </div>
                   </div>
                   <div className="overview-card">
                     <div className="overview-label">Readiness</div>

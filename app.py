@@ -157,6 +157,24 @@ def db_list_users():
     return users
 
 
+def db_student_id_exists(student_id: int) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT 1 FROM users WHERE role = 'student' AND student_id = ? LIMIT 1", (student_id,))
+    exists = cur.fetchone() is not None
+    conn.close()
+    return exists
+
+
+def db_student_id_link_count(student_id: int) -> int:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM users WHERE role = 'student' AND student_id = ?", (student_id,))
+    row = cur.fetchone()
+    conn.close()
+    return int(row[0] if row else 0)
+
+
 def db_create_user(username: str, password: str, role: str = "student", display_name: Optional[str] = None, student_id: Optional[int] = None):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -528,6 +546,13 @@ def get_current_user(authorization: Optional[str] = Header(None)):
     return session
 
 
+def get_current_user_optional(authorization: Optional[str] = Header(None)):
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return None
+    token = authorization.split(" ", 1)[1].strip()
+    return SESSIONS.get(token)
+
+
 def require_admin(user = Depends(get_current_user)):
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
@@ -593,19 +618,25 @@ def update_student_record(student_id, updates):
         raise HTTPException(status_code=400, detail="Student ID is required")
 
     row = get_row_for_student(target_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="Student not found")
-
-    updated_row = dict(row)
+    updated_row = dict(row) if row else {"student_id": target_id}
     for key, value in updates.items():
-        updated_row[key] = value
+        if value is not None and value != "":
+            updated_row[key] = value
+
+    if not updated_row.get("branch"):
+        updated_row["branch"] = "Other"
+    if not updated_row.get("college_tier"):
+        updated_row["college_tier"] = "Tier 2"
+
+    if row is None:
+        ROWS.append(updated_row)
+    else:
+        for index, existing in enumerate(ROWS):
+            if normalize_student_id(existing.get("student_id") or existing.get("StudentID")) == target_id:
+                ROWS[index] = updated_row
+                break
 
     updated_row = normalize_student_row(updated_row)
-
-    for index, existing in enumerate(ROWS):
-        if normalize_student_id(existing.get("student_id") or existing.get("StudentID")) == target_id:
-            ROWS[index] = updated_row
-            break
 
     STUDENT_INDEX[target_id] = updated_row
     persist_rows_to_dataset()
@@ -832,6 +863,8 @@ class AddStudentDataRequest(BaseModel):
 
 
 class StudentProfileUpdateRequest(BaseModel):
+    branch: Optional[str] = None
+    college_tier: Optional[str] = None
     CGPA: float = Field(ge=0, le=10)
     Internships: float = Field(ge=0)
     Projects: float = Field(ge=0)
@@ -932,8 +965,14 @@ def register(payload: CreateStudentRequest):
         if payload.admin_pin != "1390":
             raise HTTPException(status_code=400, detail="Invalid admin PIN.")
         role = "admin"
+        student_id = None
     else:
         role = "student"
+        student_id = normalize_student_id(payload.student_id)
+        if student_id is None:
+            raise HTTPException(status_code=400, detail="Student ID is required for student registration.")
+        if db_student_id_exists(student_id):
+            raise HTTPException(status_code=400, detail="Student ID is already linked to another account.")
     
     # Actually register user in the db
     user = db_create_user(
@@ -941,7 +980,7 @@ def register(payload: CreateStudentRequest):
         password=payload.password,
         role=role,
         display_name=payload.display_name or payload.username,
-        student_id=payload.student_id if role == "student" else None,
+        student_id=student_id,
     )
     if not user:
         raise HTTPException(status_code=400, detail="Username already exists")
@@ -972,6 +1011,14 @@ def login(payload: LoginRequest):
     user = get_user_by_username(payload.username)
     if not user or not verify_password(payload.password, user.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    if user.get("role") == "student":
+        sid = normalize_student_id(user.get("student_id"))
+        if sid is not None and db_student_id_link_count(sid) > 1:
+            raise HTTPException(
+                status_code=409,
+                detail="This student ID is linked to multiple accounts. Ask admin to assign unique student IDs.",
+            )
 
     token = uuid4().hex
     session = get_user_public(user)
@@ -1020,7 +1067,18 @@ def me(current_user: Dict[str, Any] = Depends(get_current_user)):
 
 
 @app.get("/api/bootstrap")
-def bootstrap(current_user: Dict[str, Any] = Depends(get_current_user)):
+def bootstrap(current_user: Optional[Dict[str, Any]] = Depends(get_current_user_optional)):
+    if not current_user:
+        return {
+            "user": None,
+            "project": PROJECT_OVERVIEW,
+            "model": model_info,
+            "insights": insights,
+            "students": [],
+            "job_postings": db_list_job_postings(),
+            "authenticated": False,
+        }
+
     student_profiles = []
     if current_user.get("role") == "admin":
         users = db_list_users()
@@ -1036,6 +1094,23 @@ def bootstrap(current_user: Dict[str, Any] = Depends(get_current_user)):
         student_row = get_row_for_student(current_user.get("student_id"))
         if student_row:
             student_profiles = [build_student_profile(student_row)]
+        else:
+            student_profiles = [
+                {
+                    "student_id": normalize_student_id(current_user.get("student_id")),
+                    "username": current_user.get("username"),
+                    "display_name": current_user.get("display_name") or current_user.get("username"),
+                    "branch": None,
+                    "college_tier": None,
+                    "placement": "Profile not created yet",
+                    "probability": None,
+                    "eligible_jobs": [],
+                    "eligible_job_count": 0,
+                    "readiness_score": None,
+                    "profile": {},
+                    "profile_missing": True,
+                }
+            ]
 
     return {
         "user": {
@@ -1049,6 +1124,7 @@ def bootstrap(current_user: Dict[str, Any] = Depends(get_current_user)):
         "insights": insights,
         "students": student_profiles,
         "job_postings": db_list_job_postings(),
+        "authenticated": True,
     }
 
 
@@ -1073,6 +1149,10 @@ def create_student(payload: AddStudentDataRequest, current_user: Dict[str, Any] 
     exists = db_get_user_by_username(payload.username)
     if exists:
         raise HTTPException(status_code=400, detail="Username already exists")
+    if db_student_id_exists(payload.student_id):
+        raise HTTPException(status_code=400, detail="Student ID is already linked to another account")
+    if get_row_for_student(payload.student_id):
+        raise HTTPException(status_code=400, detail="Student ID already exists in dataset")
     
     # 1. Run ML inference using the same pattern as dataset_predictions_csv
     features = np.array([[
