@@ -1745,6 +1745,7 @@
         const [publicData, setPublicData] = useState(null);
         const [students, setStudents] = useState([]);
         const [selectedStudentId, setSelectedStudentId] = useState(null);
+        const [studentPage, setStudentPage] = useState(1);
 
         const [loadingSession, setLoadingSession] = useState(Boolean(token));
         const [loginError, setLoginError] = useState("");
@@ -1855,6 +1856,13 @@
             setSelectedStudentId(Number(route.param));
           }
         }, [route.page, route.param]);
+
+        useEffect(() => {
+          setStudentPage((current) => {
+            const pageCount = Math.max(1, Math.ceil(students.length / 5));
+            return Math.min(current, pageCount);
+          });
+        }, [students.length]);
 
         const project = bootstrap?.project || publicData?.project || {};
         const model = bootstrap?.model || publicData?.model || {};
@@ -2066,6 +2074,21 @@
           : isStudent
             ? "Personal profile access"
             : "Limited access";
+        const studentsPerPage = 5;
+        const studentPageCount = Math.max(
+          1,
+          Math.ceil(students.length / studentsPerPage),
+        );
+        const normalizedStudentPage = Math.min(studentPage, studentPageCount);
+        const studentPageStart = (normalizedStudentPage - 1) * studentsPerPage;
+        const paginatedStudents = students.slice(
+          studentPageStart,
+          studentPageStart + studentsPerPage,
+        );
+        const studentPageEnd = Math.min(
+          studentPageStart + paginatedStudents.length,
+          students.length,
+        );
 
         if (!user) {
           const demoCards = [
@@ -2438,11 +2461,15 @@
             <section className="section-card">
               <div className="section-title">
                 <h2>Student section</h2>
-                <span>Seeded local profiles</span>
+                <span>
+                  {students.length
+                    ? `Showing ${studentPageStart + 1}-${studentPageEnd} of ${students.length}`
+                    : "Seeded local profiles"}
+                </span>
               </div>
               <div className="student-list">
                 {students.length ? (
-                  students.map((student) => (
+                  paginatedStudents.map((student) => (
                     <div className="student-card" key={student.student_id}>
                       <strong>
                         {student.display_name || student.username}
@@ -2483,6 +2510,35 @@
                   </div>
                 )}
               </div>
+              {students.length > studentsPerPage ? (
+                <div className="student-actions" style={{ marginTop: 14 }}>
+                  <button
+                    className="flat-button"
+                    type="button"
+                    onClick={() =>
+                      setStudentPage((current) => Math.max(1, current - 1))
+                    }
+                    disabled={normalizedStudentPage === 1}
+                  >
+                    Previous
+                  </button>
+                  <span className="pill">
+                    Page {normalizedStudentPage} of {studentPageCount}
+                  </span>
+                  <button
+                    className="flat-button"
+                    type="button"
+                    onClick={() =>
+                      setStudentPage((current) =>
+                        Math.min(studentPageCount, current + 1),
+                      )
+                    }
+                    disabled={normalizedStudentPage === studentPageCount}
+                  >
+                    Next
+                  </button>
+                </div>
+              ) : null}
             </section>
 
             {isAdmin && (
