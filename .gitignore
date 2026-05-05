@@ -30,3 +30,4 @@ coverage/
 debug.log*
 *.log
 *.tmp
+.env
