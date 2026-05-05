@@ -1,5 +1,6 @@
 from collections import Counter, defaultdict
 from csv import DictReader, DictWriter, reader as CsvReader
+from datetime import date, datetime
 from io import StringIO
 import json
 from pathlib import Path
@@ -323,7 +324,7 @@ def average(values):
     return round(mean(values), 2) if values else 0.0
 
 
-def build_insights(rows):
+def build_insights(rows, branch_min_students=500):
     total_students = len(rows)
     placement_counts = Counter()
     branch_stats = defaultdict(lambda: {"total": 0, "placed": 0})
@@ -384,7 +385,7 @@ def build_insights(rows):
 
     branch_rows = []
     for branch, stats in branch_stats.items():
-        if stats["total"] < 500:
+        if stats["total"] < branch_min_students:
             continue
         branch_rows.append(
             {
@@ -847,6 +848,177 @@ def build_student_profile(row):
     }
 
 
+def student_department(row):
+    for key in ("branch", "Core_Subjects"):
+        value = str(row.get(key) or "").strip()
+        if value and any(character.isalpha() for character in value):
+            return value
+    return "Unknown"
+
+
+def available_departments():
+    departments = {department for department in (student_department(row) for row in ROWS) if department != "Unknown"}
+    return sorted(departments, key=lambda value: value.lower())
+
+
+def student_tier(row):
+    for key in ("college_tier", "company_type"):
+        raw_value = str(row.get(key) or "").strip()
+        if not raw_value:
+            continue
+        if any(character.isalpha() for character in raw_value):
+            return raw_value
+        numeric_value = to_float(raw_value)
+        if numeric_value is not None and numeric_value in {1.0, 2.0, 3.0}:
+            return f"Tier {int(numeric_value)}"
+    return "Unknown"
+
+
+def available_tiers():
+    tiers = {student_tier(row) for row in ROWS if student_tier(row) != "Unknown"}
+    return sorted(tiers, key=lambda value: value.lower())
+
+
+def parse_date_value(value):
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    normalized = raw.replace("Z", "+00:00")
+    try:
+        return datetime.fromisoformat(normalized).date()
+    except ValueError:
+        pass
+    for date_format in ("%Y-%m-%d", "%d-%m-%Y", "%m/%d/%Y", "%d/%m/%Y", "%Y/%m/%d"):
+        try:
+            return datetime.strptime(raw, date_format).date()
+        except ValueError:
+            continue
+    return None
+
+
+def row_date(row):
+    preferred_keys = [
+        "placement_date",
+        "date",
+        "created_at",
+        "created_on",
+        "updated_at",
+        "timestamp",
+    ]
+    for key in preferred_keys:
+        parsed = parse_date_value(row.get(key))
+        if parsed is not None:
+            return parsed
+    for key, value in row.items():
+        if "date" not in str(key).lower():
+            continue
+        parsed = parse_date_value(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def has_date_filter_support(rows):
+    for row in rows:
+        if row_date(row) is not None:
+            return True
+    return False
+
+
+def filtered_analytics_rows(rows, department=None, tier=None, start_date=None, end_date=None):
+    date_supported = has_date_filter_support(rows)
+    try:
+        start = date.fromisoformat(start_date) if start_date else None
+        end = date.fromisoformat(end_date) if end_date else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+
+    if (start or end) and not date_supported:
+        raise HTTPException(status_code=400, detail="Date filter is not available for the current dataset.")
+    if start and end and end < start:
+        raise HTTPException(status_code=400, detail="End date must be on or after start date.")
+
+    selected = []
+    for row in rows:
+        if department and student_department(row).lower() != department.lower():
+            continue
+        if tier and student_tier(row).lower() != tier.lower():
+            continue
+        if start or end:
+            current_date = row_date(row)
+            if current_date is None:
+                continue
+            if start and current_date < start:
+                continue
+            if end and current_date > end:
+                continue
+        selected.append(row)
+
+    return selected, date_supported
+
+
+def ranked_student_rows(department):
+    selected_department = department.strip()
+    rankings = []
+    for row in ROWS:
+        if student_department(row).lower() != selected_department.lower():
+            continue
+        result_label, probability = predict_row(row)
+        probability_percent = round(probability * 100, 2) if probability is not None else None
+        rankings.append(
+            {
+                "student_id": normalize_student_id(row.get("student_id") or row.get("StudentID")),
+                "department": student_department(row),
+                "college_tier": row.get("college_tier") or row.get("company_type") or "Unknown",
+                "CGPA": to_float(row.get("CGPA")),
+                "Internships": to_float(row.get("Internships")),
+                "Projects": to_float(row.get("Projects")),
+                "Certifications": to_float(row.get("Certifications")),
+                "Communication_Skills": to_float(row.get("Communication_Skills")),
+                "Aptitude_Score": to_float(row.get("Aptitude_Score")),
+                "Backlogs": to_float(row.get("Backlogs")),
+                "prediction": result_label,
+                "probability": probability_percent,
+            }
+        )
+
+    rankings.sort(
+        key=lambda item: (
+            item["probability"] is not None,
+            item["probability"] if item["probability"] is not None else -1,
+        ),
+        reverse=True,
+    )
+    for index, item in enumerate(rankings, start=1):
+        item["rank"] = index
+    return rankings
+
+
+def student_rankings_csv(department):
+    rows = ranked_student_rows(department)
+    output = StringIO()
+    fieldnames = [
+        "rank",
+        "student_id",
+        "department",
+        "college_tier",
+        "prediction",
+        "probability",
+        "CGPA",
+        "Internships",
+        "Projects",
+        "Certifications",
+        "Communication_Skills",
+        "Aptitude_Score",
+        "Backlogs",
+    ]
+    writer = DictWriter(output, fieldnames=fieldnames)
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({field: row.get(field, "") for field in fieldnames})
+    return output.getvalue()
+
+
 def overall_stats_csv():
     buffer = StringIO()
     writer = DictWriter(buffer, fieldnames=["section", "label", "metric", "value"])
@@ -1251,6 +1423,79 @@ def list_students(current_user: Dict[str, Any] = Depends(require_admin)):
     return student_profiles
 
 
+@app.get("/api/admin/departments")
+def list_admin_departments(current_user: Dict[str, Any] = Depends(require_admin)):
+    return {"departments": available_departments()}
+
+
+@app.get("/api/admin/analytics")
+def admin_analytics(
+    department: Optional[str] = None,
+    tier: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    current_user: Dict[str, Any] = Depends(require_admin),
+):
+    normalized_department = (department or "").strip()
+    normalized_tier = (tier or "").strip()
+    normalized_start = (start_date or "").strip()
+    normalized_end = (end_date or "").strip()
+
+    filtered_rows, date_supported = filtered_analytics_rows(
+        ROWS,
+        department=normalized_department or None,
+        tier=normalized_tier or None,
+        start_date=normalized_start or None,
+        end_date=normalized_end or None,
+    )
+
+    return {
+        "filters": {
+            "departments": available_departments(),
+            "tiers": available_tiers(),
+            "date_filter_supported": date_supported,
+            "applied": {
+                "department": normalized_department or None,
+                "tier": normalized_tier or None,
+                "start_date": normalized_start or None,
+                "end_date": normalized_end or None,
+            },
+        },
+        "insights": build_insights(filtered_rows, branch_min_students=1),
+        "row_count": len(filtered_rows),
+    }
+
+
+@app.get("/api/admin/student-rankings")
+def list_student_rankings(
+    department: str,
+    page: int = 1,
+    page_size: int = 10,
+    current_user: Dict[str, Any] = Depends(require_admin),
+):
+    department = department.strip()
+    if not department:
+        raise HTTPException(status_code=400, detail="Department is required")
+
+    page = max(1, int(page))
+    page_size = min(50, max(1, int(page_size)))
+    rankings = ranked_student_rows(department)
+    total = len(rankings)
+    page_count = max(1, (total + page_size - 1) // page_size)
+    page = min(page, page_count)
+    start = (page - 1) * page_size
+    end = start + page_size
+
+    return {
+        "department": department,
+        "page": page,
+        "page_size": page_size,
+        "page_count": page_count,
+        "total": total,
+        "students": rankings[start:end],
+    }
+
+
 @app.post("/api/admin/students")
 def create_student(payload: AddStudentDataRequest, current_user: Dict[str, Any] = Depends(require_admin)):
     global insights
@@ -1470,6 +1715,15 @@ def download_dataset_csv(current_user: Dict[str, Any] = Depends(require_admin)):
 @app.get("/api/download/predictions.csv")
 def download_predictions_csv(current_user: Dict[str, Any] = Depends(require_admin)):
     return csv_response("dataset_predictions.csv", dataset_predictions_csv())
+
+
+@app.get("/api/download/student-rankings.csv")
+def download_student_rankings_csv(department: str, current_user: Dict[str, Any] = Depends(require_admin)):
+    department = department.strip()
+    if not department:
+        raise HTTPException(status_code=400, detail="Department is required")
+    safe_department = "".join(character if character.isalnum() else "_" for character in department).strip("_") or "department"
+    return csv_response(f"student_rankings_{safe_department}.csv", student_rankings_csv(department))
 
 
 @app.post("/api/predict")

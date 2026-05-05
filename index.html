@@ -304,7 +304,8 @@
         color: #2f3640;
       }
 
-      input {
+      input,
+      select {
         width: 100%;
         border: 1px solid rgba(31, 35, 40, 0.12);
         background: rgba(255, 255, 255, 0.9);
@@ -318,7 +319,8 @@
           box-shadow 0.2s ease;
       }
 
-      input:focus {
+      input:focus,
+      select:focus {
         border-color: var(--accent);
         box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
         transform: translateY(-1px);
@@ -419,6 +421,67 @@
         display: grid;
         gap: 12px;
         margin-top: 12px;
+      }
+
+      .pie-wrap {
+        display: grid;
+        grid-template-columns: 180px minmax(0, 1fr);
+        gap: 16px;
+        align-items: center;
+        margin-top: 12px;
+      }
+
+      .pie-chart {
+        width: 180px;
+        height: 180px;
+        border-radius: 50%;
+        border: 1px solid var(--border);
+      }
+
+      .pie-legend {
+        display: grid;
+        gap: 10px;
+      }
+
+      .legend-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        justify-content: space-between;
+        border: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.8);
+        border-radius: 12px;
+        padding: 10px 12px;
+      }
+
+      .legend-left {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .legend-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+      }
+
+      .method-list {
+        display: grid;
+        gap: 10px;
+        margin-top: 12px;
+      }
+
+      .method-item {
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: rgba(255, 255, 255, 0.84);
+        padding: 12px 14px;
+      }
+
+      .method-item strong {
+        display: block;
+        margin-bottom: 6px;
       }
 
       .bar-row {
@@ -883,6 +946,16 @@
         .mini-grid,
         .overview-grid {
           grid-template-columns: 1fr;
+        }
+
+        .pie-wrap {
+          grid-template-columns: 1fr;
+          justify-items: center;
+        }
+
+        .pie-chart {
+          width: 150px;
+          height: 150px;
         }
 
         .topbar {
@@ -1746,6 +1819,24 @@
         const [students, setStudents] = useState([]);
         const [selectedStudentId, setSelectedStudentId] = useState(null);
         const [studentPage, setStudentPage] = useState(1);
+        const [rankingDepartments, setRankingDepartments] = useState([]);
+        const [rankingDepartment, setRankingDepartment] = useState("");
+        const [rankingData, setRankingData] = useState(null);
+        const [rankingPage, setRankingPage] = useState(1);
+        const [loadingRankings, setLoadingRankings] = useState(false);
+        const [analyticsFilters, setAnalyticsFilters] = useState({
+          department: "",
+          tier: "",
+          start_date: "",
+          end_date: "",
+        });
+        const [analyticsOptions, setAnalyticsOptions] = useState({
+          departments: [],
+          tiers: [],
+          date_filter_supported: false,
+        });
+        const [analyticsData, setAnalyticsData] = useState(null);
+        const [loadingAnalytics, setLoadingAnalytics] = useState(false);
 
         const [loadingSession, setLoadingSession] = useState(Boolean(token));
         const [loginError, setLoginError] = useState("");
@@ -2064,6 +2155,112 @@
           }
         };
 
+        const loadRankingDepartments = async () => {
+          if (!token || !isAdmin) {
+            return;
+          }
+          try {
+            const payload = await requestJSON("/api/admin/departments", token);
+            const departments = payload.departments || [];
+            setRankingDepartments(departments);
+            setRankingDepartment((current) => current || departments[0] || "");
+          } catch (error) {
+            setPageError(error.message);
+          }
+        };
+
+        const loadStudentRankings = async (pageNumber = 1) => {
+          if (!rankingDepartment) {
+            setPageError("Choose a department first.");
+            return;
+          }
+          setLoadingRankings(true);
+          setPageError("");
+          setPageNotice("");
+          try {
+            const params = new URLSearchParams({
+              department: rankingDepartment,
+              page: String(pageNumber),
+              page_size: "10",
+            });
+            const payload = await requestJSON(
+              `/api/admin/student-rankings?${params.toString()}`,
+              token,
+            );
+            setRankingData(payload);
+            setRankingPage(payload.page || pageNumber);
+          } catch (error) {
+            setPageError(error.message);
+          } finally {
+            setLoadingRankings(false);
+          }
+        };
+
+        const loadAnalytics = async (nextFilters = analyticsFilters) => {
+          if (!token || !isAdmin) {
+            return;
+          }
+          setLoadingAnalytics(true);
+          setPageError("");
+          try {
+            const params = new URLSearchParams();
+            if (nextFilters.department) {
+              params.set("department", nextFilters.department);
+            }
+            if (nextFilters.tier) {
+              params.set("tier", nextFilters.tier);
+            }
+            if (nextFilters.start_date) {
+              params.set("start_date", nextFilters.start_date);
+            }
+            if (nextFilters.end_date) {
+              params.set("end_date", nextFilters.end_date);
+            }
+            const query = params.toString();
+            const payload = await requestJSON(
+              `/api/admin/analytics${query ? `?${query}` : ""}`,
+              token,
+            );
+            setAnalyticsData(payload);
+            setAnalyticsOptions(payload.filters || {});
+            const applied = payload.filters?.applied || {};
+            setAnalyticsFilters({
+              department: applied.department || "",
+              tier: applied.tier || "",
+              start_date: applied.start_date || "",
+              end_date: applied.end_date || "",
+            });
+          } catch (error) {
+            setPageError(error.message);
+          } finally {
+            setLoadingAnalytics(false);
+          }
+        };
+
+        useEffect(() => {
+          if (isAdmin) {
+            loadRankingDepartments();
+            loadAnalytics();
+          } else {
+            setRankingDepartments([]);
+            setRankingDepartment("");
+            setRankingData(null);
+            setRankingPage(1);
+            setAnalyticsData(null);
+            setAnalyticsOptions({
+              departments: [],
+              tiers: [],
+              date_filter_supported: false,
+            });
+            setAnalyticsFilters({
+              department: "",
+              tier: "",
+              start_date: "",
+              end_date: "",
+            });
+          }
+        }, [isAdmin, token]);
+
         const roleLabel = isAdmin
           ? "Administrator"
           : isStudent
@@ -2088,6 +2285,11 @@
         const studentPageEnd = Math.min(
           studentPageStart + paginatedStudents.length,
           students.length,
+        );
+        const featureImportances = model.top_importances || [];
+        const featureImportanceMax = Math.max(
+          ...featureImportances.map((item) => Math.abs(Number(item.score) || 0)),
+          1,
         );
 
         if (!user) {
@@ -2418,43 +2620,425 @@
                 )}
               </section>
             </div>
-          </div>
-        );
-
-        const Analytics = () => (
-          <div className="analytics-grid">
-            <section className="section-card">
-              <div className="section-title">
-                <h2>Overall placement trends</h2>
-                <span>Branches and tier performance</span>
-              </div>
-              {renderBars(insights.top_branches || [])}
-              <div style={{ height: 18 }}></div>
-              {renderBars(insights.college_tiers || [])}
-            </section>
 
             <section className="section-card">
               <div className="section-title">
-                <h2>Key placement drivers</h2>
-                <span>Placed vs not placed gaps</span>
-              </div>
-              {renderBars(insights.key_drivers || [], "delta", "gap")}
-              <div style={{ height: 18 }}></div>
-              <div className="section-title">
-                <h2>Model importance</h2>
+                <h2>Feature importance</h2>
                 <span>{model.algorithm || "Model"}</span>
               </div>
-              {renderBars(
-                (model.top_importances || []).map((item) => ({
-                  label: item.label,
-                  delta: item.score,
-                })),
-                "delta",
-                "importance",
+              {featureImportances.length ? (
+                <div className="bars">
+                  {featureImportances.map((item) => {
+                    const rawScore = Number(item.score) || 0;
+                    const width = Math.max(
+                      8,
+                      (Math.abs(rawScore) / featureImportanceMax) * 100,
+                    );
+                    return (
+                      <div className="bar-row" key={`importance-${item.label}`}>
+                        <div className="bar-head">
+                          <strong>{item.label.replace(/_/g, " ")}</strong>
+                          <span>{rawScore.toFixed(2)}%</span>
+                        </div>
+                        <div className="bar-track">
+                          <div
+                            className="bar-fill"
+                            style={{ width: `${width}%` }}
+                          ></div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="section-empty">
+                  Feature importance is unavailable for this model.
+                </div>
               )}
             </section>
+
+            {isAdmin ? (
+              <section className="section-card">
+                <div className="section-title">
+                  <h2>Student ranking table</h2>
+                  <span>
+                    {rankingData
+                      ? `${rankingData.total} students ranked`
+                      : "Filter by department"}
+                  </span>
+                </div>
+                <div className="download-selector">
+                  <label className="auth-field">
+                    Department
+                    <select
+                      value={rankingDepartment}
+                      onChange={(event) => {
+                        setRankingDepartment(event.target.value);
+                        setRankingData(null);
+                        setRankingPage(1);
+                      }}
+                    >
+                      <option value="">Select department</option>
+                      {rankingDepartments.map((department) => (
+                        <option key={department} value={department}>
+                          {department}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <div className="download-actions">
+                    <button
+                      className="primary"
+                      type="button"
+                      onClick={() => loadStudentRankings(1)}
+                      disabled={loadingRankings || !rankingDepartment}
+                    >
+                      {loadingRankings ? "Loading..." : "Proceed"}
+                    </button>
+                    {rankingData ? (
+                      <button
+                        className="flat-button"
+                        type="button"
+                        onClick={() => {
+                          const params = new URLSearchParams({
+                            department: rankingDepartment,
+                          });
+                          downloadCsv(
+                            `/api/download/student-rankings.csv?${params.toString()}`,
+                            `student_rankings_${rankingDepartment.replace(/[^a-z0-9]+/gi, "_")}.csv`,
+                          );
+                        }}
+                        disabled={busyDownload.startsWith("student_rankings_")}
+                      >
+                        Download CSV
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+
+                {rankingData ? (
+                  rankingData.students?.length ? (
+                    <>
+                      <div className="table-wrap" style={{ marginTop: 16 }}>
+                        <table>
+                          <thead>
+                            <tr>
+                              <th>Rank</th>
+                              <th>Student ID</th>
+                              <th>Probability</th>
+                              <th>Prediction</th>
+                              <th>CGPA</th>
+                              <th>Projects</th>
+                              <th>Internships</th>
+                              <th>Backlogs</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {rankingData.students.map((student) => (
+                              <tr key={`${student.rank}-${student.student_id}`}>
+                                <td>{student.rank}</td>
+                                <td>{formatValue(student.student_id)}</td>
+                                <td>
+                                  {student.probability != null
+                                    ? `${student.probability}%`
+                                    : "N/A"}
+                                </td>
+                                <td>{student.prediction}</td>
+                                <td>{formatValue(student.CGPA)}</td>
+                                <td>{formatValue(student.Projects)}</td>
+                                <td>{formatValue(student.Internships)}</td>
+                                <td>{formatValue(student.Backlogs)}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                      <div className="student-actions" style={{ marginTop: 14 }}>
+                        <button
+                          className="flat-button"
+                          type="button"
+                          onClick={() =>
+                            loadStudentRankings(Math.max(1, rankingPage - 1))
+                          }
+                          disabled={rankingData.page <= 1 || loadingRankings}
+                        >
+                          Previous
+                        </button>
+                        <span className="pill">
+                          Page {rankingData.page} of {rankingData.page_count}
+                        </span>
+                        <button
+                          className="flat-button"
+                          type="button"
+                          onClick={() =>
+                            loadStudentRankings(
+                              Math.min(rankingData.page_count, rankingPage + 1),
+                            )
+                          }
+                          disabled={
+                            rankingData.page >= rankingData.page_count ||
+                            loadingRankings
+                          }
+                        >
+                          Next
+                        </button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="section-empty" style={{ marginTop: 16 }}>
+                      No students found for this department.
+                    </div>
+                  )
+                ) : (
+                  <div className="section-empty" style={{ marginTop: 16 }}>
+                    Choose a department and press Proceed to open rankings.
+                  </div>
+                )}
+              </section>
+            ) : null}
           </div>
         );
+
+        const Analytics = () => {
+          const activeInsights = analyticsData?.insights || insights;
+          const activeSummary = activeInsights.summary || {};
+          const placedCount = Number(activeSummary.placed_students || 0);
+          const notPlacedCount = Number(activeSummary.not_placed_students || 0);
+          const splitTotal = Math.max(placedCount + notPlacedCount, 1);
+          const splitPlacedPct = (placedCount / splitTotal) * 100;
+          const splitNotPlacedPct = 100 - splitPlacedPct;
+          const dateSupported = Boolean(analyticsOptions.date_filter_supported);
+
+          return (
+            <div className="analytics-grid">
+              <section className="section-card" style={{ gridColumn: "1 / -1" }}>
+                <div className="section-title">
+                  <h2>Filter analytics</h2>
+                  <span>
+                    {analyticsData
+                      ? `${analyticsData.row_count} rows in view`
+                      : "Choose filters and apply"}
+                  </span>
+                </div>
+                <div
+                  className="form-grid"
+                  style={{ gridTemplateColumns: "repeat(4, minmax(0, 1fr))" }}
+                >
+                  <label className="auth-field">
+                    Department
+                    <select
+                      value={analyticsFilters.department}
+                      onChange={(event) =>
+                        setAnalyticsFilters((current) => ({
+                          ...current,
+                          department: event.target.value,
+                        }))
+                      }
+                    >
+                      <option value="">All departments</option>
+                      {(analyticsOptions.departments || []).map((department) => (
+                        <option key={department} value={department}>
+                          {department}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="auth-field">
+                    Tier
+                    <select
+                      value={analyticsFilters.tier}
+                      onChange={(event) =>
+                        setAnalyticsFilters((current) => ({
+                          ...current,
+                          tier: event.target.value,
+                        }))
+                      }
+                    >
+                      <option value="">All tiers</option>
+                      {(analyticsOptions.tiers || []).map((tier) => (
+                        <option key={tier} value={tier}>
+                          {tier}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="auth-field">
+                    Start date
+                    <input
+                      type="date"
+                      value={analyticsFilters.start_date}
+                      disabled={!dateSupported}
+                      onChange={(event) =>
+                        setAnalyticsFilters((current) => ({
+                          ...current,
+                          start_date: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                  <label className="auth-field">
+                    End date
+                    <input
+                      type="date"
+                      value={analyticsFilters.end_date}
+                      disabled={!dateSupported}
+                      onChange={(event) =>
+                        setAnalyticsFilters((current) => ({
+                          ...current,
+                          end_date: event.target.value,
+                        }))
+                      }
+                    />
+                  </label>
+                </div>
+                <div className="download-actions">
+                  <button
+                    className="primary"
+                    type="button"
+                    onClick={() => loadAnalytics(analyticsFilters)}
+                    disabled={loadingAnalytics}
+                  >
+                    {loadingAnalytics ? "Applying..." : "Apply filters"}
+                  </button>
+                  <button
+                    className="flat-button"
+                    type="button"
+                    onClick={() => {
+                      const reset = {
+                        department: "",
+                        tier: "",
+                        start_date: "",
+                        end_date: "",
+                      };
+                      setAnalyticsFilters(reset);
+                      loadAnalytics(reset);
+                    }}
+                    disabled={loadingAnalytics}
+                  >
+                    Reset
+                  </button>
+                </div>
+                {!dateSupported ? (
+                  <div className="section-empty" style={{ marginTop: 12 }}>
+                    Date filtering is unavailable for this dataset because no
+                    date field was detected.
+                  </div>
+                ) : null}
+              </section>
+
+              <section className="section-card">
+                <div className="section-title">
+                  <h2>Placement outcome split</h2>
+                  <span>Pie view + totals</span>
+                </div>
+                <div className="pie-wrap">
+                  <div
+                    className="pie-chart"
+                    style={{
+                      background: `conic-gradient(#0f766e 0% ${splitPlacedPct}%, #ca8a04 ${splitPlacedPct}% 100%)`,
+                    }}
+                  ></div>
+                  <div className="pie-legend">
+                    <div className="legend-row">
+                      <div className="legend-left">
+                        <span
+                          className="legend-dot"
+                          style={{ background: "#0f766e" }}
+                        ></span>
+                        <strong>Placed</strong>
+                      </div>
+                      <span>
+                        {placedCount} ({splitPlacedPct.toFixed(2)}%)
+                      </span>
+                    </div>
+                    <div className="legend-row">
+                      <div className="legend-left">
+                        <span
+                          className="legend-dot"
+                          style={{ background: "#ca8a04" }}
+                        ></span>
+                        <strong>Not placed</strong>
+                      </div>
+                      <span>
+                        {notPlacedCount} ({splitNotPlacedPct.toFixed(2)}%)
+                      </span>
+                    </div>
+                    <div className="legend-row">
+                      <div className="legend-left">
+                        <strong>Total students</strong>
+                      </div>
+                      <span>{placedCount + notPlacedCount}</span>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section className="section-card">
+                <div className="section-title">
+                  <h2>Branch placement rates</h2>
+                  <span>Bar chart by branch</span>
+                </div>
+                {renderBars(activeInsights.top_branches || [])}
+                <div style={{ height: 18 }}></div>
+                <div className="section-title">
+                  <h2>College tier comparison</h2>
+                  <span>Tier-wise placement rates</span>
+                </div>
+                {renderBars(activeInsights.college_tiers || [])}
+              </section>
+
+              <section className="section-card">
+                <div className="section-title">
+                  <h2>Driver analysis</h2>
+                  <span>Placed vs not placed gap</span>
+                </div>
+                {renderBars(activeInsights.key_drivers || [], "delta", "gap")}
+                <div style={{ height: 18 }}></div>
+                <div className="section-title">
+                  <h2>Model importance</h2>
+                  <span>{model.algorithm || "Model"}</span>
+                </div>
+                {renderBars(
+                  (model.top_importances || []).map((item) => ({
+                    label: item.label,
+                    delta: item.score,
+                  })),
+                  "delta",
+                  "importance",
+                )}
+              </section>
+
+              <section className="section-card">
+                <div className="section-title">
+                  <h2>Methods used</h2>
+                  <span>How branch rates are computed</span>
+                </div>
+                <div className="method-list">
+                  <div className="method-item">
+                    <strong>Branch placement rate formula</strong>
+                    Placement Rate (%) = (Placed Students in Branch / Total
+                    Students in Branch) * 100
+                  </div>
+                  <div className="method-item">
+                    <strong>Placement classification</strong>
+                    Rows are treated as placed when placement label is truthy
+                    (1/yes/true/placed), otherwise not placed.
+                  </div>
+                  <div className="method-item">
+                    <strong>Driver comparison method</strong>
+                    Numeric driver impact is shown as average(placed) -
+                    average(not_placed) for each feature.
+                  </div>
+                  <div className="method-item">
+                    <strong>Model-based ranking context</strong>
+                    XGBoost feature importances and prediction probabilities are
+                    read from the trained model metadata exposed by the backend.
+                  </div>
+                </div>
+              </section>
+            </div>
+          );
+        };
 
         const Students = () => (
           <div className="students-grid">
