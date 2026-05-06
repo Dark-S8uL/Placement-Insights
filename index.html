@@ -1922,6 +1922,12 @@
         const [suggestions, setSuggestions] = useState(null);
         const [loadingSuggestions, setLoadingSuggestions] = useState(false);
         const [suggestionsError, setSuggestionsError] = useState("");
+        const [changeCurrentPassword, setChangeCurrentPassword] = useState("");
+        const [changeNewPassword, setChangeNewPassword] = useState("");
+        const [changeConfirmPassword, setChangeConfirmPassword] = useState("");
+        const [changingPassword, setChangingPassword] = useState(false);
+        const [changePasswordError, setChangePasswordError] = useState("");
+        const [changePasswordSuccess, setChangePasswordSuccess] = useState("");
 
         const [loadingSession, setLoadingSession] = useState(Boolean(token));
         const [loginError, setLoginError] = useState("");
@@ -1997,6 +2003,37 @@
           } finally {
             setLoadingSession(false);
           }
+        };
+
+        const changePassword = async () => {
+          setChangePasswordError("");
+          setChangePasswordSuccess("");
+          if (changeNewPassword !== changeConfirmPassword) {
+            setChangePasswordError("New passwords do not match");
+            return;
+          }
+          setChangingPassword(true);
+          try {
+            const payload = await requestJSON(
+              "/api/auth/change-password",
+              token,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  current_password: changeCurrentPassword,
+                  new_password: changeNewPassword,
+                }),
+              },
+            );
+            setChangePasswordSuccess(payload.message || "Password updated");
+            setChangeCurrentPassword("");
+            setChangeNewPassword("");
+            setChangeConfirmPassword("");
+          } catch (err) {
+            setChangePasswordError(err.message || String(err));
+          }
+          setChangingPassword(false);
         };
 
         useEffect(() => {
@@ -3544,6 +3581,69 @@
                   onSaved={handleSelfSave}
                 />
               )}
+
+              <section className="section-card">
+                <div className="section-title">
+                  <h2>Change password</h2>
+                  <span>Update your account password</span>
+                </div>
+                <div style={{ marginTop: 12 }}>
+                  <div className="form-grid">
+                    <div>
+                      <label className="form-label">Current password</label>
+                      <input
+                        type="password"
+                        value={changeCurrentPassword}
+                        onChange={(e) =>
+                          setChangeCurrentPassword(e.target.value)
+                        }
+                        className="form-input"
+                      />
+                    </div>
+                    <div>
+                      <label className="form-label">New password</label>
+                      <input
+                        type="password"
+                        value={changeNewPassword}
+                        onChange={(e) => setChangeNewPassword(e.target.value)}
+                        className="form-input"
+                      />
+                    </div>
+                    <div>
+                      <label className="form-label">Confirm new password</label>
+                      <input
+                        type="password"
+                        value={changeConfirmPassword}
+                        onChange={(e) =>
+                          setChangeConfirmPassword(e.target.value)
+                        }
+                        className="form-input"
+                      />
+                    </div>
+                  </div>
+
+                  {changePasswordError && (
+                    <div style={{ color: "red", marginTop: 8 }}>
+                      {changePasswordError}
+                    </div>
+                  )}
+                  {changePasswordSuccess && (
+                    <div style={{ color: "green", marginTop: 8 }}>
+                      {changePasswordSuccess}
+                    </div>
+                  )}
+
+                  <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                    <button
+                      className="primary"
+                      onClick={changePassword}
+                      disabled={changingPassword}
+                    >
+                      {changingPassword ? "Changing..." : "Change password"}
+                    </button>
+                  </div>
+                </div>
+              </section>
 
               <section className="section-card">
                 <div className="section-title">

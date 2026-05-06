@@ -274,6 +274,24 @@ def db_get_user_by_student_id(student_id: int):
     }
 
 
+def db_update_user_password(username: str, new_password: str) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE users SET password_hash = ? WHERE username = ?",
+            (hash_password(new_password), username),
+        )
+        conn.commit()
+        changed = cur.rowcount > 0
+    except Exception:
+        conn.rollback()
+        changed = False
+    finally:
+        conn.close()
+    return changed
+
+
 def db_get_resume(student_id: int):
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -2032,6 +2050,11 @@ class ResumeRequest(BaseModel):
     certifications: str = ""
     achievements: str = ""
 
+ 
+
+class PasswordChangeRequest(BaseModel):
+    current_password: str
+    new_password: str
 
 ROWS = load_rows()
 STUDENT_INDEX = build_student_index(ROWS)
@@ -2216,6 +2239,35 @@ def me(current_user: Dict[str, Any] = Depends(get_current_user)):
         },
         "profile": profile,
     }
+
+
+
+@app.post("/api/auth/change-password")
+def change_password(payload: PasswordChangeRequest, current_user: Dict[str, Any] = Depends(get_current_user)):
+    username = current_user.get("username")
+    if not username:
+        raise HTTPException(status_code=400, detail="Invalid user session")
+
+    stored = db_get_user_by_username(username)
+    if not stored:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if not verify_password(payload.current_password, stored.get("password_hash", "")):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+
+    if not payload.new_password or len(payload.new_password) < 6:
+        raise HTTPException(status_code=400, detail="New password must be at least 6 characters")
+
+    ok = db_update_user_password(username, payload.new_password)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to update password")
+
+    # Invalidate other sessions for this user
+    for k, v in list(SESSIONS.items()):
+        if v.get("username") == username and k != current_user.get("token"):
+            SESSIONS.pop(k, None)
+
+    return {"success": True, "message": "Password changed successfully"}
 
 
 @app.get("/api/bootstrap")
